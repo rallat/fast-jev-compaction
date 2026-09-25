@@ -68,6 +68,30 @@ describe('hook config', () => {
   });
 });
 
+describe('hook redaction', () => {
+  it('reads redactSecrets and redacts the request body but not the returned transcript', async () => {
+    expect(resolveHookConfig({ redactSecrets: false }).redactSecrets).toBe(false);
+    expect(resolveHookConfig({ redactSecrets: 'no' }).redactSecrets).toBeUndefined();
+
+    const password = ['hun', 'ter', '42'].join('');
+    const messages = transcript();
+    messages[0] = message('user', `Fix the failing test. DB_PASSWORD=${password}`, { handle: 'h-0' });
+    const bodies: string[] = [];
+    const { messages: out } = await compactSession(
+      messages,
+      { ...resolveHookConfig({ preserveRecentMessages: 2 }), apiKey: 'k' },
+      jevFetch(() => 0, bodies),
+    );
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toContain(password);
+      expect(body).toContain('DB_PASSWORD=[REDACTED:secret]');
+    }
+    expect(out[0]).toBe(messages[0]);
+    expect(out[0]!.text).toContain(password);
+  });
+});
+
 describe('session message mapping', () => {
   it('returns the engine objects for untouched messages and handle-less copies for rebuilt ones', () => {
     const messages = transcript();
