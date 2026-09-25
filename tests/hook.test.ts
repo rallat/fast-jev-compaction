@@ -3,6 +3,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -204,10 +205,72 @@ describe('preserved thinking', () => {
     expect(out[4]).toBe(messages[6]);
   });
 
+  it('rebuilds a later assistant turn holding text and tool uses from its text and tool blocks', () => {
+    const mixed = message('assistant', 'Checking the config.', {
+      toolUses: [{ tool_use_id: 'tool-9', tool: 'Read', input: { file_path: 'a.json' }, text: '{}' }],
+      handle: 'h-mixed',
+    });
+    const input = [message('user', 'old', { handle: 'h-old' }), mixed, result('tool-9', '{}')];
+    const out = toSessionMessages(input, input.slice(1));
+    expect(out[0]).toEqual({ role: 'assistant', text: 'Checking the config.', toolUses: mixed.toolUses });
+    expect(out[0]!.toolUses[0]).toBe(mixed.toolUses[0]);
+    expect(out[1]).toBe(input[2]);
+  });
+
   it('returns every engine message whole when nothing was edited', () => {
     const messages = transcript();
     const out = decide(messages, 0.9, 0.9, 0.9);
     expect(firstEdit(messages, out)).toBe(-1);
     expect(out.every((m, i) => m === messages[i])).toBe(true);
+  });
+});
+
+describe('session.compact triggers', () => {
+  type Handler = (
+    $: unknown,
+    event: { trigger: string; messages: readonly SessionMessage[] },
+    next: (event: unknown) => Promise<unknown>,
+  ) => Promise<unknown>;
+
+  function compactHandler(): Handler {
+    const handlers = new Map<string, Handler>();
+    register(((name: string, handler: Handler) => handlers.set(name, handler)) as never, { apiKey: 'k' });
+    return handlers.get('session.compact')!;
+  }
+
+  function host(fetched: string[], logs: string[]) {
+    return {
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+      ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+      http: {
+        fetch: async (url: string) => {
+          fetched.push(url);
+          return { status: 500, ok: false, text: 'down' };
+        },
+      },
+    };
+  }
+
+  it('skips precompute without asking Jev or the built-in summary', async () => {
+    const fetched: string[] = [];
+    const nexts: unknown[] = [];
+    const out = await compactHandler()(host(fetched, []), { trigger: 'precompute', messages: transcript() }, async (e) => {
+      nexts.push(e);
+      return { messages: [] };
+    });
+    expect(out).toEqual({ skip: expect.any(String) });
+    expect(fetched).toEqual([]);
+    expect(nexts).toEqual([]);
+  });
+
+  it('still runs on the triggers that install the result', async () => {
+    for (const trigger of ['manual', 'auto', 'plugin']) {
+      const logs: string[] = [];
+      const event = { trigger, messages: transcript() };
+      const out = await compactHandler()(host([], logs), event, async (e) => ({ fellBackWith: e }));
+      expect(logs.some((line) => line.startsWith('fallback to built-in summary'))).toBe(true);
+      expect(out).toEqual({ fellBackWith: event });
+    }
   });
 });

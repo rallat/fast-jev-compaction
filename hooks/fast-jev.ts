@@ -272,6 +272,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    // A precompute result is installed later, after newer turns were appended
+    // past the swap point; their thinking blocks predate the edit and would be
+    // invalid (see "Preserved thinking" in hooks/README.md). Nothing is
+    // precomputed, so the compaction that installs runs this hook in place.
+    if (event.trigger === 'precompute') return { skip: 'fast-jev compacts when the result installs' };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {

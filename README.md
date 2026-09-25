@@ -129,9 +129,12 @@ stage was needed, and the number of requests.
   middle "invalidates every later thinking block". The Claude Code hook
   therefore returns every assistant message after the first edit without its
   engine handle, so it is rebuilt from its text and tool blocks and carries no
-  thinking. Stripping thinking blocks while keeping text and tool calls is the
-  documented recovery. Those turns lose their reasoning, and the prompt cache
-  restarts once from the first edit, as it does after any compaction.
+  thinking. This follows the guide's keep-tail advice ("strip the thinking
+  blocks from the retained turns"); that the thinking blocks before the edit
+  stay valid is inferred, not yet verified against the API. The hook skips the
+  `precompute` trigger, whose result would install after newer turns. Those
+  turns lose their reasoning, and the prompt cache restarts once from the
+  first edit, as it does after any compaction.
 
 ## Claude Code plugin
 

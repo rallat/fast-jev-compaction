@@ -84,13 +84,28 @@ individual turns out of the *middle* of the transcript invalidates every later
 thinking block, and no client-side shape avoids it". Accounts created on or
 after 2026-08-31 get a 400 when such a block is replayed.
 
-A message returned with its engine `handle` "stands as the engine has it",
-thinking blocks included. So `toSessionMessages` keeps handles only up to the
-first removed or rebuilt message. After that point, every assistant message is
+A message returned with its engine `handle` "stands as the engine has it"
+(the host types do not mention thinking; that this keeps its thinking blocks
+is inferred). So `toSessionMessages` keeps handles only up to the first
+removed or rebuilt message. After that point, every assistant message is
 returned without its handle and is built from its `role`, `text` and tool
-blocks, so it carries no thinking. User messages keep their handles. This
-matches the guide's recovery: "Strip every `thinking` and `redacted_thinking`
-block from the history (each turn's `text` and `tool_use` blocks stay)".
+blocks, so it carries no thinking. User messages keep their handles. A rebuilt
+message also loses the order of its text and tool blocks within the turn.
+
+This follows the guide's advice for keep-tail compaction, applied to the turns
+after the edit: "strip the thinking blocks from the retained turns (text and
+tool calls can stay)". Thinking blocks before the edit stay. The guide's
+`drop_block` rule has the same shape: the API "drops the first mismatched
+block and every thinking block after it". Those earlier blocks keep an
+unchanged prefix and unchanged predecessors, so they are expected to stay
+valid. This is inferred, not yet verified against the API with
+`prefix_mismatch_behavior: "error"`.
+
+The hook skips the `precompute` trigger (`{ skip }`). A precompute result is
+installed later, and the guide says background compaction fails because "by
+the time the summary lands, several newer turns exist above the swap point
+and all of their thinking blocks predate it". The compaction that installs
+runs the hook in place instead.
 
 ## Scope and caveat
 
