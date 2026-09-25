@@ -66,6 +66,7 @@ no tool call is a candidate.
 
 Each request body holds:
 
+- `model`: the Jev model name (`jev-latest` by default).
 - `state.context`: a fixed description of the task (the same text every time).
 - `state.goal`: your `goal` option, or else your last three prompts (up to 500
   characters each).
@@ -76,7 +77,9 @@ Each request body holds:
   output (`ok, 4213 chars (omitted)`).
 - `questions`: two yes/no questions per candidate call, naming only the call
   id, the tool name and the output size.
-- The `authorization: Bearer <your TypeSafe key>` header.
+
+The only request header with your data is `authorization: Bearer <your
+TypeSafe key>`.
 
 What is never sent:
 
@@ -93,14 +96,22 @@ It replaces these with a typed placeholder such as `[REDACTED:aws_key]`:
 - PEM private key blocks; AWS access key ids; GitHub tokens (`ghp_`, `gho_`,
   `ghs_`, `ghu_`, `ghr_`, `github_pat_`); `sk-` keys (OpenAI, Anthropic,
   OpenRouter); Slack `xox*-` tokens; Google `AIza` keys; JWTs.
-- `Bearer` / `Basic` / raw `Authorization` values, and passwords in URLs
-  (`postgres://user:[REDACTED:url_password]@host`).
+- `Authorization` and `Proxy-Authorization` values with any scheme
+  (`Bearer`, `Basic`, `Token`) or none, in header lines, `curl -H` arguments,
+  `setHeader('Authorization', ...)` calls and tool input fields; a `Bearer`
+  token with no header name; secret-named headers such as `X-Api-Key` or
+  `X-Auth-Token` in `curl -H` / `--header` arguments; passwords in URLs
+  (`postgres://user:[REDACTED:url_password]@host`). The scheme stays.
 - Literal values of secret-named keys (`password`, `passphrase`, `secret`,
   `token`, `api_key`, `apiKey`, `private_key`, `access_key`, `credential`) in
   `KEY=value`, `key: value`, `"key": "value"` and tool input fields. The key
-  name stays and only the value is replaced. References such as `$TOKEN`,
-  `process.env.X` or `<your key>`, type names and bare variable names are left
-  alone.
+  name stays and only the value is replaced. For `password`, `passwd` and
+  `passphrase` keys even a short word is redacted. For the other keys an
+  unquoted value needs a digit, a symbol or 16 characters, and a quoted value
+  needs a digit, a symbol, mixed case or 8 characters, so a short plain word
+  such as `token: abcd` is sent. References such as `$TOKEN`,
+  `process.env.X` or `<your key>`, calls such as `getKey()`, type names and
+  bare variable names are left alone.
 
 Redaction changes only what is sent. The transcript that stays in your
 session is returned verbatim, secrets included. The state budget is measured

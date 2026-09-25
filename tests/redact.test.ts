@@ -99,6 +99,21 @@ describe('redactText: authorization headers', () => {
   });
 });
 
+describe('redactText: other authorization schemes and secret-named headers', () => {
+  const hex = join('9944b09199c62bcf', '9418ad846dd0e4bbdfc6ee4b');
+  const cases: Array<[string, string, string]> = [
+    ['Token scheme in a curl header', `curl -H "Authorization: Token ${hex}" x`, 'curl -H "Authorization: Token [REDACTED:bearer]" x'],
+    ['setHeader call', `req.setHeader('Authorization', 'token ${hex}')`, "req.setHeader('Authorization', 'token [REDACTED:bearer]')"],
+    ['Proxy-Authorization', `Proxy-Authorization: Basic ${hex}`, 'Proxy-Authorization: Basic [REDACTED:bearer]'],
+    ['X-Api-Key curl header', `curl -H "X-Api-Key: ${hex}" x`, 'curl -H "X-Api-Key: [REDACTED:secret]" x'],
+    ['x-auth-token --header', `curl --header 'x-auth-token: ${hex}' x`, "curl --header 'x-auth-token: [REDACTED:secret]' x"],
+    ['bare Bearer token', `use Bearer ${hex} for it`, 'use Bearer [REDACTED:bearer] for it'],
+  ];
+  it.each(cases)('%s', (_name, input, expected) => {
+    expect(redactText(input)).toBe(expected);
+  });
+});
+
 describe('redactText: passwords in URLs', () => {
   it.each([
     ['postgres://admin:s3cret@db:5432/app', 'postgres://admin:[REDACTED:url_password]@db:5432/app'],
@@ -124,6 +139,10 @@ describe('redactText: secret-named assignments keep the key, drop the value', ()
     ['apikey field', 'apikey: "k9k9k9k9"', 'apikey: "[REDACTED:secret]"'],
     ['SECRET_KEY setting', "SECRET_KEY = 'django-insecure-abc'", "SECRET_KEY = '[REDACTED:secret]'"],
     ['dotted config key', 'spring.datasource.password=Pa55word', 'spring.datasource.password=[REDACTED:secret]'],
+    ['short quoted password word', 'password = "letmein"', 'password = "[REDACTED:secret]"'],
+    ['short env password word', 'DB_PASSWORD=letmein', 'DB_PASSWORD=[REDACTED:secret]'],
+    ['short YAML password word', 'password: letmein', 'password: [REDACTED:secret]'],
+    ['passphrase word', "passphrase: 'hunter'", "passphrase: '[REDACTED:secret]'"],
   ];
   it.each(cases)('%s', (_name, input, expected) => {
     expect(redactText(input)).toBe(expected);
@@ -152,6 +171,19 @@ describe('redactText: ordinary code and ids stay untouched', () => {
     ['type alias with a credential word', 'type RequestCredentials = "include" | "omit";\ntype CredentialField = "webauthn";'],
     ['env var name as the value', 'the credential: `DB_PASSWORD` and token="GITHUB_TOKEN"'],
     ['public key block', '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----'],
+    ['sk- inside a CSS class', 'class="sk-loading-spinner-2024-variant"'],
+    ['sk- after a hyphen', 'task-sk-12345678901234567890abc'],
+    ['Basic before a word with digits', 'the Basic configuration1234567 was fine'],
+    ['basic before a file path', 'Add a basic src/components/Header.tsx file with a nav bar'],
+    ['Basic before a component name', 'Create a Basic AuthenticationProvider component'],
+    ['Bearer before a component name', 'Bearer AuthenticationProvider'],
+    ['YAML value that is a call chain', 'accessToken: z.string().min(10)'],
+    ['YAML value that is a call', 'password: hashPassword(input)'],
+    ['indented YAML call', '  apiKey: getKey()'],
+    ['password typed as a type name', 'password: string\npassword = "string"'],
+    ['password from a camelCase variable', 'password: userPassword'],
+    ['Authorization header name in prose', 'the Authorization header is required'],
+    ['authorization followed by a comma in prose', 'for authorization, see AuthController2.ts'],
   ];
   it.each(cases)('%s', (_name, input) => {
     expect(redactText(input)).toBe(input);
@@ -168,6 +200,26 @@ describe('redactText: cost on long unbroken runs', () => {
     const started = Date.now();
     redactText(input);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('stays linear on 1 MB of unterminated private key headers', () => {
+    const header = join('-----BEGIN ', 'PRIVATE KEY-----.');
+    const started = Date.now();
+    redactText(header.repeat(Math.ceil(1_000_000 / header.length)));
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
+describe('redactText: unterminated private key blocks', () => {
+  const header = join('-----BEGIN ', 'PRIVATE KEY-----');
+  it('drops the header and the base64 lines after it', () => {
+    expect(redactText(`${header}\n${alnum(64)}\n${alnum(64)}\nnext`)).toBe('[REDACTED:private_key]\nnext');
+    expect(redactText(`"${header}\\n${alnum(64)}\\n${alnum(40)}"`)).toBe('"[REDACTED:private_key]"');
+  });
+  it('keeps the prose after a header that is only mentioned', () => {
+    expect(
+      redactText(`The PEM starts with ${header} and then comes base64, we strip headers\nthen decode it\nnext steps: run tests`),
+    ).toBe('The PEM starts with [REDACTED:private_key] and then comes base64, we strip headers\nthen decode it\nnext steps: run tests');
   });
 });
 
@@ -190,6 +242,31 @@ describe('redactInput', () => {
       count: 3,
       tokenLimit: 5,
     });
+  });
+
+  it('redacts Authorization and password fields whatever the value shape', () => {
+    const hex = join('9944b09199c62bcf', '9418ad846dd0e4bbdfc6ee4b');
+    expect(
+      redactInput({
+        headers: { Authorization: hex, 'proxy-authorization': `Token ${hex}`, authorization: 'Bearer auth' },
+        password: 'hunter',
+      }),
+    ).toEqual({
+      headers: {
+        Authorization: '[REDACTED:bearer]',
+        'proxy-authorization': 'Token [REDACTED:bearer]',
+        authorization: 'Bearer auth',
+      },
+      password: '[REDACTED:secret]',
+    });
+  });
+
+  it('only turns true cycles into [circular], not an object shared twice', () => {
+    const shared = { a: 1 };
+    expect(redactInput({ first: shared, second: shared })).toEqual({ first: { a: 1 }, second: { a: 1 } });
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    expect(redactInput(cyclic)).toEqual({ a: 1, self: '[circular]' });
   });
 });
 

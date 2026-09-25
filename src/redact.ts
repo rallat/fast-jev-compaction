@@ -22,9 +22,17 @@ interface TokenRule {
 /** Secrets recognisable from their own shape, wherever they appear. */
 const TOKEN_RULES: TokenRule[] = [
   {
-    // Unterminated blocks (a cut-off paste) lose the base64 run that follows.
+    // A block with its END line. Stopping at the next BEGIN keeps many
+    // unterminated headers in one text linear.
     pattern:
-      /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----(?:[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----|(?:[A-Za-z0-9+/=\s:,-]|\\[nr])*)/g,
+      /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----(?:(?!-----BEGIN )[\s\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
+    type: () => 'private_key',
+  },
+  {
+    // A cut-off block loses only the base64 lines after its header, so prose
+    // that merely mentions a header stays.
+    pattern:
+      /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----(?:(?:\s|\\[nr])*[A-Za-z0-9+/]{16,}={0,2}(?:(?:\s|\\[nr])+[A-Za-z0-9+/]{16,}={0,2})*)?/g,
     type: () => 'private_key',
   },
   { pattern: /\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/g, type: () => 'aws_key' },
@@ -33,14 +41,15 @@ const TOKEN_RULES: TokenRule[] = [
     type: () => 'github_token',
   },
   {
-    pattern: /\bsk-[A-Za-z0-9_-]{20,}/g,
+    pattern: /(?<![\w-])sk-[A-Za-z0-9_-]{20,}/g,
     type: (match) =>
       match.startsWith('sk-ant-')
         ? 'anthropic_key'
         : match.startsWith('sk-or-')
           ? 'openrouter_key'
           : 'openai_key',
-    accept: (match) => /\d/.test(match),
+    // A digit and one long random run: `sk-loading-spinner-2024` is a CSS class.
+    accept: (match) => /\d/.test(match) && /[A-Za-z0-9]{16,}/.test(match),
   },
   { pattern: /\b(?:xox[abposr]-[A-Za-z0-9-]{10,}|xapp-\d-[A-Za-z0-9-]{10,})/g, type: () => 'slack_token' },
   { pattern: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g, type: () => 'google_api_key' },
@@ -53,10 +62,25 @@ const TOKEN_RULES: TokenRule[] = [
 /** `scheme://user:password@host`: the user stays, the password goes. */
 const URL_PASSWORD = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/[^\s:/@[\]]+:)([^\s@/]+)@/gi;
 
-/** `Bearer <token>` / `Basic <credentials>`: the scheme stays, the value goes. */
-const AUTH_SCHEME = /\b(Bearer|Basic)(\s+)([A-Za-z0-9._~+/-]+=*)/gi;
-/** `Authorization: <token>` without a scheme. */
-const AUTH_RAW = /\b(authorization["']?\s*[:=]\s*["']?)(?!Bearer\b|Basic\b)([A-Za-z0-9._~+/-]+=*)/gi;
+/**
+ * An Authorization value after its header name, in a header line, an object
+ * or a `setHeader('Authorization', ...)` call. Any scheme word (`Bearer`,
+ * `Basic`, `Token`) stays and only the value goes.
+ */
+const AUTH_HEADER =
+  /\b((?:proxy-)?authorization(?:["'`]?\s*[:=]|["'`]\s*,)\s*["'`]?)(?:([A-Za-z][A-Za-z-]*)(\s+))?([A-Za-z0-9._~+/-]+=*)/gi;
+/**
+ * `Bearer <token>` with no header name. Case-sensitive, and the token needs a
+ * digit and no `/`, so prose such as `Bearer AuthenticationProvider` stays.
+ */
+const BARE_BEARER = /\bBearer(\s+)([A-Za-z0-9._~+-]+=*)(?![\w/])/g;
+/** `curl -H "X-Api-Key: <value>"`: a secret-named header in a quoted argument. */
+const CURL_HEADER = /((?:^|\s)(?:-H|--header)(?:\s+|=)(["']))([A-Za-z][\w-]*)(:[ \t]*)([^"'\n]+)(?=\2)/g;
+
+/** Whether an Authorization value is a credential rather than a word. */
+function isAuthValue(value: string, hasScheme: boolean): boolean {
+  return value.length >= (hasScheme ? 12 : 16) && looksRandom(value);
+}
 
 /** The secret word must end the key name, optionally followed by `_key` or digits. */
 const SECRET_KEY =
@@ -77,23 +101,34 @@ const REFERENCE = /^(?:\$|%|<|\{\{|process\.env|os\.environ|import\.meta\.env|en
 /** An environment variable name (`DB_PASSWORD`), not its value. */
 const ENV_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const DOTTED_NAME = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
+/** A call or call chain (`getKey()`, `z.string().min(10)`), not a literal. */
+const CALL = /^[A-Za-z_$][\w$.]*\(/;
+/** Type names a typed field or schema puts where a value would go. */
+const TYPE_NAME = /^(?:string|str|number|int|integer|float|boolean|bool|bytes|object|any|unknown|text|char|varchar)$/i;
+/** Keys whose value is a password, where even a short word is the secret. */
+const PASSWORD_KEY = /(?:password|passwd|passphrase)(?:[_-]?value)?\d*$/i;
 
 /**
  * Whether the value of a secret-named key is a literal worth hiding rather
- * than a placeholder, reference or type. Quoted values need four characters
- * and a digit, symbol, mixed case or length 8 (so `"include"` stays); unquoted
- * values need a digit or symbol, or 16 characters, so `token: string` and
- * `token=readToken()` are left alone.
+ * than a placeholder, reference, call or type. Quoted values need four
+ * characters and a digit, symbol, mixed case or length 8 (so `"include"`
+ * stays); unquoted values need a digit or symbol, or 16 characters, so
+ * `token: string` and `token=readToken()` are left alone. When `key` names a
+ * password, a lowercase word of four or more letters also counts
+ * (`password: letmein`), but not a camelCase variable (`userPassword`).
  */
-export function isLiteralSecret(value: string, quoted: boolean): boolean {
+export function isLiteralSecret(value: string, quoted: boolean, key = ''): boolean {
   const text = value.trim();
   if (text.length === 0 || text.startsWith('[REDACTED')) return false;
   if (NOT_A_VALUE.test(text) || /^\d+$/.test(text) || REFERENCE.test(text)) return false;
   if (/^(.)\1*$/.test(text) || /^[*x•.]+$/i.test(text)) return false;
-  if (ENV_NAME.test(text)) return false;
-  if (quoted) return text.length >= 4 && (looksRandom(text) || /[^A-Za-z]/.test(text) || text.length >= 8);
-  if (DOTTED_NAME.test(text)) return false;
-  return /[^A-Za-z_]/.test(text) || text.length >= 16;
+  if (ENV_NAME.test(text) || TYPE_NAME.test(text)) return false;
+  const password = PASSWORD_KEY.test(key.slice(key.lastIndexOf('.') + 1));
+  if (quoted) {
+    return text.length >= 4 && (password || looksRandom(text) || /[^A-Za-z]/.test(text) || text.length >= 8);
+  }
+  if (DOTTED_NAME.test(text) || CALL.test(text)) return false;
+  return /[^A-Za-z_]/.test(text) || text.length >= 16 || (password && /^[a-z]{4,}$/.test(text));
 }
 
 /**
@@ -122,16 +157,19 @@ export function redactText(text: string): string {
   out = out.replace(URL_PASSWORD, (match, prefix: string, password: string) =>
     password.startsWith('[REDACTED') ? match : `${prefix}${placeholder('url_password')}@`,
   );
-  out = out.replace(AUTH_SCHEME, (match, scheme: string, space: string, value: string) =>
-    value.length >= 12 && looksRandom(value) ? `${scheme}${space}${placeholder('bearer')}` : match,
+  out = out.replace(AUTH_HEADER, (match, prefix: string, scheme = '', space = '', value: string) =>
+    isAuthValue(value, scheme !== '') ? `${prefix}${scheme}${space}${placeholder('bearer')}` : match,
   );
-  out = out.replace(AUTH_RAW, (match, prefix: string, value: string) =>
-    value.length >= 16 && looksRandom(value) ? `${prefix}${placeholder('bearer')}` : match,
+  out = out.replace(BARE_BEARER, (match, space: string, value: string) =>
+    value.length >= 16 && /\d/.test(value) && /[A-Za-z]/.test(value) ? `Bearer${space}${placeholder('bearer')}` : match,
+  );
+  out = out.replace(CURL_HEADER, (match, lead: string, _quote: string, name: string, separator: string, value: string) =>
+    isSecretKey(name) && isLiteralSecret(value, true, name) ? `${lead}${name}${separator}${placeholder('secret')}` : match,
   );
   out = out.replace(
     QUOTED_PAIR,
     (match, keyQuote: string, key: string, separator: string, quote: string, value: string) =>
-      isSecretKey(key) && isLiteralSecret(value, true)
+      isSecretKey(key) && isLiteralSecret(value, true, key)
         ? `${keyQuote}${key}${keyQuote}${separator}${quote}${placeholder('secret')}${quote}`
         : match,
   );
@@ -139,34 +177,50 @@ export function redactText(text: string): string {
     BARE_ASSIGNMENT,
     (match, lead: string, dashes: string, key: string, value: string, offset: number, whole: string) =>
       isSecretKey(key) &&
-      isLiteralSecret(value, false) &&
+      isLiteralSecret(value, false, key) &&
       whole.charAt(offset + match.length) !== '('
         ? `${lead}${dashes}${key}=${placeholder('secret')}`
         : match,
   );
   out = out.replace(YAML_PAIR, (match, lead: string, key: string, separator: string, value: string) =>
-    isSecretKey(key) && isLiteralSecret(value, false)
+    isSecretKey(key) && isLiteralSecret(value, false, key)
       ? `${lead}${key}${separator}${placeholder('secret')}`
       : match,
   );
   return out;
 }
 
-function redactValue(value: unknown, key: string | undefined, seen: WeakSet<object>): unknown {
+/** An object field that holds an Authorization header value. */
+const AUTH_KEY = /^(?:proxy-)?authorization$/i;
+
+/** `Token abc123...` or a bare token under an Authorization field. */
+function redactAuthField(value: string): string {
+  const out = redactText(value);
+  if (out !== value) return out;
+  const parts = /^(\s*)(?:([A-Za-z][A-Za-z-]*)(\s+))?([A-Za-z0-9._~+/-]+=*)(\s*)$/.exec(value);
+  if (!parts) return out;
+  const [, lead = '', scheme = '', space = '', token = '', trail = ''] = parts;
+  return isAuthValue(token, scheme !== '') ? `${lead}${scheme}${space}${placeholder('bearer')}${trail}` : out;
+}
+
+/** `ancestors` holds only the objects on the current path, so a shared object is not a cycle. */
+function redactValue(value: unknown, key: string | undefined, ancestors: WeakSet<object>): unknown {
   if (typeof value === 'string') {
-    return key !== undefined && isSecretKey(key) && isLiteralSecret(value, true)
+    if (key !== undefined && AUTH_KEY.test(key)) return redactAuthField(value);
+    return key !== undefined && isSecretKey(key) && isLiteralSecret(value, true, key)
       ? placeholder('secret')
       : redactText(value);
   }
   if (value === null || typeof value !== 'object') return value;
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((item) => redactValue(item, undefined, seen));
+  if (ancestors.has(value)) return '[circular]';
   const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([name, item]) => [name, redactValue(item, name, seen)]),
-  );
+  if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
+  ancestors.add(value);
+  const out = Array.isArray(value)
+    ? value.map((item) => redactValue(item, undefined, ancestors))
+    : Object.fromEntries(Object.entries(value).map(([name, item]) => [name, redactValue(item, name, ancestors)]));
+  ancestors.delete(value);
+  return out;
 }
 
 /**
