@@ -66,6 +66,20 @@ describe('hook config', () => {
       minReductionRatio: 0.25,
     });
   });
+
+  it('passes the keep budget and drop-call options through to the library', () => {
+    expect(
+      resolveHookConfig({ dropCallThreshold: 0.25, keepBudgetTokens: 800, keepBudgetThreshold: 0.3, keepBudgetRatio: 0.1, truncateHeadChars: 'x' }),
+    ).toEqual({
+      dropCallThreshold: 0.25,
+      keepBudgetTokens: 800,
+      keepBudgetThreshold: 0.3,
+      keepBudgetRatio: 0.1,
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+    });
+  });
 });
 
 describe('session message mapping', () => {

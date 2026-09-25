@@ -16,11 +16,15 @@ import type {
 
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
-  keepThreshold: 0.5,
+  keepThreshold: 0.7,
+  dropCallThreshold: 0.3,
+  keepBudgetTokens: 1500,
+  keepBudgetThreshold: 0.2,
+  keepBudgetRatio: 0.05,
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
-  truncateHeadChars: 300,
+  truncateHeadChars: 150,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -34,6 +38,10 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
     keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    dropCallThreshold: finite(options.dropCallThreshold, DEFAULT_OPTIONS.dropCallThreshold),
+    keepBudgetTokens: Math.max(0, finite(options.keepBudgetTokens, DEFAULT_OPTIONS.keepBudgetTokens)),
+    keepBudgetThreshold: finite(options.keepBudgetThreshold, DEFAULT_OPTIONS.keepBudgetThreshold),
+    keepBudgetRatio: Math.max(0, finite(options.keepBudgetRatio, DEFAULT_OPTIONS.keepBudgetRatio)),
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -52,16 +60,20 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
   };
 }
 
-/** The two `noul` questions asked about one call: keep the call, keep its result. */
+/**
+ * The two `noul` questions asked about one call: keep the call (at least as a
+ * record), keep its full output. Neither suggests that a re-run makes an
+ * output safe to drop; that wording pushed every answer towards "drop".
+ */
 export function questionsFor(call: ToolCall): JevQuestions {
   return {
     [`call_${call.id}`]: {
       type: 'noul',
-      instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next`,
+      instructions: `Tool call ${call.id} (${call.tool}) should stay in the history at least as a record: later messages build on it (a change it made, a check whose result was reported, a fact the work relies on) or the latest request needs its input`,
     },
     [`result_${call.id}`]: {
       type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
+      instructions: `The user's latest request or the ongoing task needs exact text from the full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars)`,
     },
   };
 }
@@ -98,20 +110,108 @@ export function batchCalls(
   return batches;
 }
 
+/**
+ * The decision for one call on its own: keep it when `keepResult` reaches
+ * `keepThreshold`, remove it with its result when `keepCall` is below
+ * `dropCallThreshold` (`keepThreshold` when absent), else truncate its result.
+ */
 export function decideCall(
   call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
   answer: CallAnswer,
-  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold'> &
+    Partial<Pick<ResolvedCompactOptions, 'dropCallThreshold'>>,
 ): CallDecision {
   const base = { id: call.id, tool: call.tool, ...answer };
   if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
   if (answer.keepResult >= options.keepThreshold) {
     return { ...base, action: 'keep', reason: 'kept' };
   }
-  if (answer.keepCall >= options.keepThreshold) {
+  if (answer.keepCall >= (options.dropCallThreshold ?? options.keepThreshold)) {
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
+}
+
+/**
+ * The keep budget for a session of `sessionTokens` estimated tokens:
+ * `keepBudgetRatio` of the session, never less than `keepBudgetTokens`, so
+ * the share of outputs that can stay does not shrink as sessions grow.
+ */
+export function keepBudgetFor(
+  sessionTokens: number,
+  options: Pick<ResolvedCompactOptions, 'keepBudgetTokens' | 'keepBudgetRatio'>,
+): number {
+  return Math.max(options.keepBudgetTokens, Math.floor(options.keepBudgetRatio * sessionTokens));
+}
+
+/**
+ * The candidates below `keepThreshold` whose results still stay in full: those
+ * with `keepResult` of at least `keepBudgetThreshold`, likeliest first, as
+ * long as their keep costs fit `keepBudgetTokens` together. A keep cost is
+ * the estimated tokens keeping the full result adds over its truncated form;
+ * results with no cost stay whole either way and take no budget. Calibrated
+ * probabilities are low for most outputs, so the ranking carries the signal;
+ * the budget bounds what a low probability can cost.
+ */
+export function budgetKeeps(
+  calls: readonly ToolCall[],
+  answers: ReadonlyMap<string, CallAnswer>,
+  keepCosts: ReadonlyMap<string, number>,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold' | 'keepBudgetTokens' | 'keepBudgetThreshold'>,
+): Set<string> {
+  const ranked = calls
+    .flatMap((call) => {
+      const p = answers.get(call.id)?.keepResult;
+      const cost = keepCosts.get(call.id) ?? 0;
+      if (call.pinned || p === undefined || cost <= 0) return [];
+      if (p < options.keepBudgetThreshold || p >= options.keepThreshold) return [];
+      return [{ id: call.id, cost, p }];
+    })
+    .sort((a, b) => b.p - a.p || a.cost - b.cost);
+  const kept = new Set<string>();
+  let used = 0;
+  for (const { id, cost } of ranked) {
+    if (used + cost > options.keepBudgetTokens) continue;
+    used += cost;
+    kept.add(id);
+  }
+  return kept;
+}
+
+/** Decides every call: `decideCall`, plus the results `budgetKeeps` lets stay. */
+export function decideCalls(
+  calls: readonly ToolCall[],
+  answers: ReadonlyMap<string, CallAnswer>,
+  keepCosts: ReadonlyMap<string, number>,
+  options: Pick<
+    ResolvedCompactOptions,
+    'keepThreshold' | 'dropCallThreshold' | 'keepBudgetTokens' | 'keepBudgetThreshold'
+  >,
+): CallDecision[] {
+  const budgeted = budgetKeeps(calls, answers, keepCosts, options);
+  return calls.map((call) => {
+    const answer = answers.get(call.id) ?? { keepCall: 1, keepResult: 1 };
+    if (!budgeted.has(call.id)) return decideCall(call, answer, options);
+    return { id: call.id, tool: call.tool, ...answer, action: 'keep', reason: 'kept' };
+  });
+}
+
+/** Estimated tokens keeping each call's full result adds over its truncated form. */
+function keepCosts(
+  messages: readonly Message[],
+  calls: readonly ToolCall[],
+  headChars: number,
+): Map<string, number> {
+  return new Map(
+    calls.map((call) => {
+      const result = messages[call.resultIndex]?.toolResults?.find(
+        (r) => r.tool_use_id === call.tool_use_id,
+      );
+      const text = result?.text ?? '';
+      const truncated = truncatedResultText(text, call.isError, headChars);
+      return [call.id, Math.max(0, estimateTokens(text) - estimateTokens(truncated))];
+    }),
+  );
 }
 
 async function askBatch(
@@ -238,6 +338,23 @@ export function messageChars(message: Message): number {
   return total;
 }
 
+/** Estimated tokens of the text, tool input and tool output of a transcript. */
+export function transcriptTokens(messages: readonly Message[]): number {
+  let total = 0;
+  for (const message of messages) {
+    total += estimateTokens(message.text);
+    for (const tool of message.toolUses) {
+      try {
+        total += estimateTokens(JSON.stringify(tool.input));
+      } catch {
+        total += 20;
+      }
+    }
+    for (const result of message.toolResults ?? []) total += estimateTokens(result.text);
+  }
+  return total;
+}
+
 export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   const { charsBefore, charsAfter } = result.stats;
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
@@ -251,8 +368,9 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
  * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
- * sent as state with every batch of questions. Throws when Jev fails or the
- * history cannot be fitted; the caller decides whether to fall back.
+ * sent as state with every batch of questions; `decideCalls` turns the
+ * answers into keep, truncate or remove. Throws when Jev fails or the history
+ * cannot be fitted; the caller decides whether to fall back.
  */
 export async function compact(
   messages: readonly Message[],
@@ -278,8 +396,11 @@ export async function compact(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
 
-  const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+  const decisions = decideCalls(
+    calls,
+    answers,
+    keepCosts(messages, candidates, resolved.truncateHeadChars),
+    { ...resolved, keepBudgetTokens: keepBudgetFor(transcriptTokens(messages), resolved) },
   );
   const kept = applyDecisions(
     messages,

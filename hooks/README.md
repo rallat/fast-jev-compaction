@@ -9,10 +9,13 @@ root, so the hook imports it directly) and maps the result back onto session
 messages. User and assistant text is never touched. Jev is sent the whole
 conversation as `state` (tool outputs replaced by a one-line note) and, for
 every tool call outside the pinned first and newest messages, two questions:
-whether the call should stay and whether its full output should stay. An
-item is kept when Jev's probability reaches `keepThreshold`; a dropped result
-is truncated to its first `truncateHeadChars` characters plus a one-line note,
-and a dropped call disappears with its result.
+whether the call should stay and whether its full output should stay. A
+result stays in full when Jev's probability reaches `keepThreshold`, or when
+the keep budget takes it (likeliest first, charged only what the full
+output adds over its truncated form, within `keepBudgetRatio` of the session
+or `keepBudgetTokens`, whichever is larger). Any other result is truncated to its first
+`truncateHeadChars` characters plus a one-line note, and a call disappears
+with its result only when its own probability is below `dropCallThreshold`.
 
 The state is fitted into `maxStateTokens` in stages: tool inputs are
 truncated, then long texts are abridged (oldest first, pinned messages last),
@@ -48,13 +51,17 @@ The plugin declares these `userConfig` values in
 
 | Option | Default |
 | --- | ---: |
-| `keepThreshold` | `0.5` |
+| `keepThreshold` | `0.7` |
+| `keepBudgetTokens` | `1500` |
+| `keepBudgetRatio` | `0.05` |
+| `keepBudgetThreshold` | `0.2` |
+| `dropCallThreshold` | `0.3` |
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
-| `truncateHeadChars` | `300` |
+| `truncateHeadChars` | `150` |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or

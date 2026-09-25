@@ -62,6 +62,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
   for (const key of [
     'keepThreshold',
+    'dropCallThreshold',
+    'keepBudgetTokens',
+    'keepBudgetThreshold',
+    'keepBudgetRatio',
     'preserveRecentMessages',
     'maxStateTokens',
     'maxRequestTokens',

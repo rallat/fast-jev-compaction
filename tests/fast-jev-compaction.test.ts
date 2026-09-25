@@ -7,12 +7,17 @@ import {
   compact,
   compactMessages,
   decideCall,
+  decideCalls,
   estimateTokens,
   fitState,
   JevClient,
+  keepBudgetFor,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
+  STATE_CONTEXT,
+  type CallAnswer,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -30,6 +35,12 @@ function call(id: string, tool: string, input: Record<string, unknown>, text: st
 
 function result(id: string, text: string, isError = false): Message {
   return message('user', '', { toolResults: [{ tool_use_id: id, text, isError }] });
+}
+
+function render(messages: readonly Message[]): string {
+  return messages
+    .flatMap((m) => [m.text, ...m.toolUses.map((t) => JSON.stringify(t.input)), ...(m.toolResults ?? []).map((r) => r.text)])
+    .join('\n');
 }
 
 const fileA = 'export const a = 1;\n'.repeat(50);
@@ -74,18 +85,26 @@ const fit = {
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
     expect(resolveOptions()).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.7,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
-      truncateHeadChars: 300,
+      truncateHeadChars: 150,
+      keepBudgetTokens: 1500,
+      keepBudgetThreshold: 0.2,
+      keepBudgetRatio: 0.05,
+      dropCallThreshold: 0.3,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
       preserveRecentMessages: 2.7,
       truncateHeadChars: -1.2,
+      keepBudgetTokens: -5,
+      keepBudgetRatio: -1,
     })).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.7,
+      keepBudgetTokens: 0,
+      keepBudgetRatio: 0,
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
@@ -255,9 +274,113 @@ describe('question batching', () => {
   });
 });
 
+describe('questions', () => {
+  const read: ToolCall = {
+    id: 't4',
+    tool: 'Read',
+    tool_use_id: 'tool-4',
+    input: {},
+    callIndex: 1,
+    resultIndex: 2,
+    resultChars: 1231,
+    isError: false,
+    pinned: false,
+  };
+
+  it('ask what the latest request needs, without suggesting a re-run makes outputs safe to drop', () => {
+    const questions = questionsFor(read);
+    expect(Object.keys(questions)).toEqual(['call_t4', 'result_t4']);
+    const text = [STATE_CONTEXT, ...Object.values(questions).map((q) => q.instructions)].join('\n');
+    expect(text).not.toMatch(/re-?run|re-?read/i);
+    expect(questions.result_t4?.instructions).toContain("user's latest request");
+    expect(questions.result_t4?.instructions).toContain('t4 (Read, 1231 chars)');
+    expect(questions.call_t4?.instructions).toContain('record');
+  });
+});
+
 describe('decisions', () => {
   const options = { keepThreshold: 0.5 };
   const unpinned = { id: 't1', tool: 'Read', pinned: false };
+
+  it('truncates instead of removing a call unless keepCall is below dropCallThreshold', () => {
+    const floor = { keepThreshold: 0.7, dropCallThreshold: 0.3 };
+    expect(decideCall(unpinned, { keepCall: 0.4, keepResult: 0.1 }, floor)).toMatchObject({
+      action: 'drop_result',
+      reason: 'result_dropped',
+    });
+    expect(decideCall(unpinned, { keepCall: 0.2, keepResult: 0.1 }, floor).action).toBe('drop_call');
+    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.7 }, floor).action).toBe('keep');
+  });
+
+  describe('keep budget', () => {
+    const budget = { keepThreshold: 0.7, dropCallThreshold: 0.3, keepBudgetTokens: 1000, keepBudgetThreshold: 0.2 };
+    const make = (id: string, pinned = false): ToolCall => ({
+      id,
+      tool: 'Bash',
+      tool_use_id: `tool-${id}`,
+      input: {},
+      callIndex: 1,
+      resultIndex: 2,
+      resultChars: 0,
+      isError: false,
+      pinned,
+    });
+    const run = (rows: [string, number, number, number][], pinned: string[] = [], options = budget) => {
+      const calls = rows.map(([id]) => make(id, pinned.includes(id)));
+      const answers = new Map<string, CallAnswer>(rows.map(([id, keepCall, keepResult]) => [id, { keepCall, keepResult }]));
+      const costs = new Map(rows.map(([id, , , t]) => [id, t]));
+      return Object.fromEntries(decideCalls(calls, answers, costs, options).map((d) => [d.id, d.action]));
+    };
+
+    it('keeps the likeliest results below keepThreshold while their keep costs fit the budget', () => {
+      expect(run([
+        ['big', 0.9, 0.6, 3000],
+        ['small', 0.9, 0.4, 300],
+        ['medium', 0.9, 0.3, 600],
+        ['noise', 0.9, 0.15, 10],
+        ['junk', 0.1, 0.05, 50],
+      ])).toEqual({ big: 'drop_result', small: 'keep', medium: 'keep', noise: 'drop_result', junk: 'drop_call' });
+    });
+
+    it('always keeps results at or above keepThreshold and pinned calls, outside the budget', () => {
+      expect(run([
+        ['sure', 0.9, 0.8, 50_000],
+        ['pinned', 0, 0, 50_000],
+        ['costly', 0.9, 0.5, 900],
+        ['cheap', 0.9, 0.45, 200],
+      ], ['pinned'])).toEqual({ sure: 'keep', pinned: 'keep', costly: 'keep', cheap: 'drop_result' });
+    });
+
+    it('ranks by probability, so many small unlikely outputs cannot crowd out a likelier one', () => {
+      const small = Array.from({ length: 12 }, (_, i): [string, number, number, number] => [`s${i}`, 0.9, 0.22, 110]);
+      const actions = run([...small, ['needed', 0.9, 0.56, 432]], [], { ...budget, keepBudgetTokens: 1500 });
+      expect(actions.needed).toBe('keep');
+      expect(Object.values(actions).filter((a) => a === 'keep')).toHaveLength(1 + Math.floor((1500 - 432) / 110));
+    });
+
+    it('spends nothing on results that truncation would leave whole', () => {
+      const short = Array.from({ length: 20 }, (_, i): [string, number, number, number] => [`s${i}`, 0.9, 0.25, 0]);
+      const actions = run([...short, ['needed', 0.9, 0.6, 950]]);
+      expect(actions.needed).toBe('keep');
+      expect(actions.s0).toBe('drop_result');
+    });
+
+    it('keeps nothing extra when the budget is zero', () => {
+      const calls = [make('a')];
+      const decisions = decideCalls(calls, new Map([['a', { keepCall: 0.9, keepResult: 0.6 }]]), new Map([['a', 10]]), {
+        ...budget,
+        keepBudgetTokens: 0,
+      });
+      expect(decisions[0]?.action).toBe('drop_result');
+    });
+  });
+
+  it('sizes the keep budget as a share of the session, never below keepBudgetTokens', () => {
+    expect(keepBudgetFor(40_000, { keepBudgetTokens: 1500, keepBudgetRatio: 0.05 })).toBe(2000);
+    expect(keepBudgetFor(10_000, { keepBudgetTokens: 1500, keepBudgetRatio: 0.05 })).toBe(1500);
+    expect(keepBudgetFor(40_000, { keepBudgetTokens: 1500, keepBudgetRatio: 0 })).toBe(1500);
+    expect(keepBudgetFor(40_000, { keepBudgetTokens: 0, keepBudgetRatio: 0 })).toBe(0);
+  });
 
   it('keeps, drops the result, or drops the call based on the keep probabilities', () => {
     expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.7 }, options).action).toBe('keep');
@@ -362,6 +485,67 @@ describe('compact', () => {
     expect(output.messages).toHaveLength(messages.length);
     expect(output.stats).toMatchObject({ resultsDropped: 3, kept: 0, callsDropped: 0, pinned: 0 });
     expect(reductionRatio(output)).toBeGreaterThan(0);
+  });
+
+  it('keeps the output the latest request needs even when every probability is low', async () => {
+    const messages = transcript();
+    messages[4]!.toolUses[0]!.text = 'x'.repeat(2000);
+    messages[5]!.toolResults![0]!.text = 'x'.repeat(2000);
+    messages[7]!.toolResults![0]!.text = `FAIL b.test.ts\n${'  at frame\n'.repeat(60)}AssertionError: expected 2 to be 3`;
+    const answers: Record<string, number> = {
+      call_t1: 0.5,
+      result_t1: 0.1,
+      call_t2: 0.2,
+      result_t2: 0.12,
+      call_t3: 0.6,
+      result_t3: 0.35,
+    };
+    const output = await compact(messages, fakeJev((name) => answers[name] ?? 0), { preserveRecentMessages: 1 });
+    expect(output.decisions.map((d) => d.action)).toEqual(['drop_result', 'drop_call', 'keep']);
+    expect(output.messages.flatMap((m) => m.toolResults ?? []).map((r) => r.tool_use_id)).toEqual(['tool-1', 'tool-3']);
+    expect(output.messages.find((m) => m.toolResults?.[0]?.tool_use_id === 'tool-3')?.toolResults?.[0]?.text).toContain(
+      'AssertionError: expected 2 to be 3',
+    );
+    expect(output.stats).toMatchObject({ kept: 1, resultsDropped: 1, callsDropped: 1 });
+  });
+
+  it('charges the keep budget only what keeping a result adds over its truncated form', async () => {
+    const short = 'ok '.repeat(88);
+    const needed = `FAIL needed.test.ts\n${'  at frame (src/needed.ts:1:1)\n'.repeat(120)}AssertionError: expected 2 to be 3`;
+    const messages: Message[] = [message('user', 'Fix the failing test.')];
+    for (let i = 1; i <= 20; i += 1) {
+      messages.push(call(`tool-${i}`, 'Bash', { command: `git status ${i}` }, short), result(`tool-${i}`, short));
+    }
+    messages.push(call('tool-needed', 'Bash', { command: 'npm test' }, needed), result('tool-needed', needed, true));
+    messages.push(message('user', 'What is the exact failing assertion?'));
+    expect(short.length).toBeLessThanOrEqual(270);
+    const output = await compact(
+      messages,
+      fakeJev((name) => (name.startsWith('call_') ? 0.9 : name === 'result_t21' ? 0.6 : 0.25)),
+      { preserveRecentMessages: 1 },
+    );
+    expect(output.decisions.find((d) => d.id === 't21')?.action).toBe('keep');
+    expect(render(output.messages)).toContain('AssertionError: expected 2 to be 3');
+  });
+
+  it('scales the keep budget with the session so a larger needed output can stay', async () => {
+    const needed = `FAIL big.test.ts\n${'  at frame (src/big.ts:10:5) while resolving value\n'.repeat(160)}AssertionError: expected 2 to be 3`;
+    const chatter = 'Reviewing the module layout and the notes from the previous step. '.repeat(4000);
+    const messages: Message[] = [
+      message('user', 'Fix the failing test.'),
+      message('assistant', chatter),
+      call('tool-big', 'Bash', { command: 'npm test' }, needed),
+      result('tool-big', needed, true),
+      message('user', 'What is the exact failing assertion?'),
+    ];
+    const marginal = estimateTokens(needed);
+    expect(marginal).toBeGreaterThan(1600);
+    expect(0.05 * messages.reduce((sum, m) => sum + estimateTokens(m.text), 0)).toBeGreaterThan(marginal);
+    const answers = (name: string) => (name.startsWith('call_') ? 0.9 : 0.56);
+    const output = await compact(messages, fakeJev(answers), { preserveRecentMessages: 1 });
+    expect(output.decisions[0]?.action).toBe('keep');
+    const fixed = await compact(messages, fakeJev(answers), { preserveRecentMessages: 1, keepBudgetRatio: 0 });
+    expect(fixed.decisions[0]?.action).toBe('drop_result');
   });
 
   it('keeps everything without calling Jev when no tool call is a candidate', async () => {

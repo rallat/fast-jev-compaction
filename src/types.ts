@@ -95,21 +95,40 @@ export interface FittedState {
 export interface CompactOptions {
   /** Ongoing task description; defaults to the last few user prompts. */
   goal?: string;
-  /** Minimum keep probability for a call or result to stay. Default 0.5. */
+  /** `keepResult` at or above which a result always stays in full, whatever its size. Default 0.7. */
   keepThreshold?: number;
+  /** A call is removed with its result only when `keepCall` is below this; otherwise its result is truncated. Default 0.3. */
+  dropCallThreshold?: number;
+  /**
+   * Minimum keep budget: estimated tokens that results below `keepThreshold`
+   * may add over their truncated form by staying in full, filled likeliest
+   * first. Default 1500.
+   */
+  keepBudgetTokens?: number;
+  /** Minimum `keepResult` for a result to compete for the keep budget. Default 0.2. */
+  keepBudgetThreshold?: number;
+  /**
+   * Share of the session's estimated tokens the keep budget grows to when that
+   * is more than `keepBudgetTokens`. Default 0.05.
+   */
+  keepBudgetRatio?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
-  /** Characters of a dropped tool result to retain. Default 300. */
+  /** Characters of a dropped tool result to retain. Default 150. */
   truncateHeadChars?: number;
 }
 
 export interface ResolvedCompactOptions {
   goal: string;
   keepThreshold: number;
+  dropCallThreshold: number;
+  keepBudgetTokens: number;
+  keepBudgetThreshold: number;
+  keepBudgetRatio: number;
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
