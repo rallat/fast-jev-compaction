@@ -100,12 +100,18 @@ export interface CompactOptions {
   /** A call is removed with its result only when `keepCall` is below this; otherwise its result is truncated. Default 0.3. */
   dropCallThreshold?: number;
   /**
-   * Estimated tokens of results below `keepThreshold` that may still stay in
-   * full, filled with the likeliest per token first. Default 1500.
+   * Minimum keep budget: estimated tokens that results below `keepThreshold`
+   * may add over their truncated form by staying in full, filled likeliest
+   * first. Default 1500.
    */
   keepBudgetTokens?: number;
-  /** Minimum `keepResult` for a result to compete for `keepBudgetTokens`. Default 0.2. */
+  /** Minimum `keepResult` for a result to compete for the keep budget. Default 0.2. */
   keepBudgetThreshold?: number;
+  /**
+   * Share of the session's estimated tokens the keep budget grows to when that
+   * is more than `keepBudgetTokens`. Default 0.05.
+   */
+  keepBudgetRatio?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
@@ -122,6 +128,7 @@ export interface ResolvedCompactOptions {
   dropCallThreshold: number;
   keepBudgetTokens: number;
   keepBudgetThreshold: number;
+  keepBudgetRatio: number;
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;

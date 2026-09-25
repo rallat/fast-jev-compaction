@@ -65,6 +65,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'dropCallThreshold',
     'keepBudgetTokens',
     'keepBudgetThreshold',
+    'keepBudgetRatio',
     'preserveRecentMessages',
     'maxStateTokens',
     'maxRequestTokens',

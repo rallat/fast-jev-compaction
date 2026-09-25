@@ -51,11 +51,14 @@ built-in compaction summary with the original messages.
    - `keepResult ≥ keepThreshold` (0.7) → keep call and result, whatever the
      size;
    - else, if the **keep budget** takes the result → keep call and result.
-     Results with `keepResult ≥ keepBudgetThreshold` (0.2) are taken likeliest
-     per token first (`keepResult` divided by the result's estimated tokens)
-     while together they fit `keepBudgetTokens` (1500). Calibrated
-     probabilities are low for most outputs, needed ones included, so the
-     ranking carries the signal and the budget bounds what it costs;
+     Results with `keepResult ≥ keepBudgetThreshold` (0.2) are taken
+     likeliest first while their keep costs fit the budget together. A keep
+     cost is the estimated tokens the full result adds over its truncated
+     form, so a short output that truncation would leave whole costs nothing
+     and takes no budget. The budget is `keepBudgetRatio` (5%) of the
+     session's estimated tokens, never less than `keepBudgetTokens` (1500).
+     Calibrated probabilities are low for most outputs, needed ones included,
+     so the ranking carries the signal and the budget bounds what it costs;
    - else `keepCall ≥ dropCallThreshold` (0.3) → keep the call, truncate the
      result to its first `truncateHeadChars` (150) characters plus a one-line
      note. This is the floor for most calls, so the transcript keeps a record
@@ -103,7 +106,8 @@ To bring your own transport, implement `JevAsker` (one `ask(state, questions)`
 method) and call `compact(messages, asker, options)`; `buildJevRequest` and
 `parseJevResponse` give you the HTTP request body and response validation.
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
-`decideCall`, `budgetKeeps`, `decideCalls`, `applyDecisions`) are exported too.
+`decideCall`, `budgetKeeps`, `keepBudgetFor`, `decideCalls`,
+`applyDecisions`) are exported too.
 
 `apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
 put it in a source file.
@@ -118,7 +122,8 @@ put it in a source file.
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.7` | `keepResult` at or above which a result always stays in full |
-| `keepBudgetTokens` | `1500` | Estimated tokens of results below `keepThreshold` that may still stay in full, likeliest per token first; `0` disables |
+| `keepBudgetTokens` | `1500` | Minimum keep budget: estimated tokens results below `keepThreshold` may add over their truncated form by staying in full, likeliest first |
+| `keepBudgetRatio` | `0.05` | Share of the session's estimated tokens the keep budget grows to; `0` with `keepBudgetTokens: 0` disables the budget |
 | `keepBudgetThreshold` | `0.2` | Minimum `keepResult` for a result to compete for the keep budget |
 | `dropCallThreshold` | `0.3` | A call is removed with its result only when `keepCall` is below this; otherwise its result is truncated |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
@@ -137,8 +142,10 @@ stage was needed, and the number of requests.
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a low probability is not a proof that a
   result is safe to delete, which is why the keep budget also keeps results by
-  rank. `keepBudgetTokens` is a fixed size, so it covers a larger share of a
-  short session than of a long one.
+  rank. Below 30k estimated tokens the budget is the fixed `keepBudgetTokens`,
+  so it covers a larger share of a short session than of a long one; a needed
+  output larger than the budget stays only when `keepResult` reaches
+  `keepThreshold`.
 - The full state is repeated with every request, so a history near the state
   ceiling costs one request per handful of questions.
 
@@ -197,13 +204,17 @@ network check.
 `examples/fixtures/` (each lists the facts its final request needs). It
 reports tokens before and after, which facts survived, the decisions and what
 Jev billed, next to a rule baseline that truncates every unpinned output to
-300 characters without asking Jev. Each run costs one Jev request per session,
-so it is not part of `npm test`.
+300 characters without asking Jev, and the character reduction, flagging any
+run below the hook's `minReductionRatio` where the hook would fall back to the
+built-in summary. `--pad N` inserts N generic filler tool calls into the older
+part of each session so many small outputs contest the keep budget. Each run
+costs one Jev request per session, so it is not part of `npm test`.
 
 ```sh
 OPENROUTER_API_KEY=... npx tsx examples/live-eval.ts --runs 3   # or TYPESAFE_API_KEY
 npx tsx examples/live-eval.ts --dry                             # no request
 npx tsx examples/live-eval.ts --fixture debug-500 --set keepBudgetTokens=1000
+npx tsx examples/live-eval.ts --runs 3 --pad 30                 # budget crowding
 ```
 
 ## Animated demo (macOS)

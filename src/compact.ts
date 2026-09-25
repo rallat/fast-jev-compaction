@@ -20,6 +20,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   dropCallThreshold: 0.3,
   keepBudgetTokens: 1500,
   keepBudgetThreshold: 0.2,
+  keepBudgetRatio: 0.05,
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
@@ -40,6 +41,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     dropCallThreshold: finite(options.dropCallThreshold, DEFAULT_OPTIONS.dropCallThreshold),
     keepBudgetTokens: Math.max(0, finite(options.keepBudgetTokens, DEFAULT_OPTIONS.keepBudgetTokens)),
     keepBudgetThreshold: finite(options.keepBudgetThreshold, DEFAULT_OPTIONS.keepBudgetThreshold),
+    keepBudgetRatio: Math.max(0, finite(options.keepBudgetRatio, DEFAULT_OPTIONS.keepBudgetRatio)),
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -131,32 +133,46 @@ export function decideCall(
 }
 
 /**
+ * The keep budget for a session of `sessionTokens` estimated tokens:
+ * `keepBudgetRatio` of the session, never less than `keepBudgetTokens`, so
+ * the share of outputs that can stay does not shrink as sessions grow.
+ */
+export function keepBudgetFor(
+  sessionTokens: number,
+  options: Pick<ResolvedCompactOptions, 'keepBudgetTokens' | 'keepBudgetRatio'>,
+): number {
+  return Math.max(options.keepBudgetTokens, Math.floor(options.keepBudgetRatio * sessionTokens));
+}
+
+/**
  * The candidates below `keepThreshold` whose results still stay in full: those
- * with `keepResult` of at least `keepBudgetThreshold`, likeliest per token
- * first, as long as their estimated tokens fit `keepBudgetTokens` together.
- * Calibrated probabilities are low for most outputs, so the ranking carries
- * the signal; the budget bounds what a low probability can cost.
+ * with `keepResult` of at least `keepBudgetThreshold`, likeliest first, as
+ * long as their keep costs fit `keepBudgetTokens` together. A keep cost is
+ * the estimated tokens keeping the full result adds over its truncated form;
+ * results with no cost stay whole either way and take no budget. Calibrated
+ * probabilities are low for most outputs, so the ranking carries the signal;
+ * the budget bounds what a low probability can cost.
  */
 export function budgetKeeps(
   calls: readonly ToolCall[],
   answers: ReadonlyMap<string, CallAnswer>,
-  resultTokens: ReadonlyMap<string, number>,
+  keepCosts: ReadonlyMap<string, number>,
   options: Pick<ResolvedCompactOptions, 'keepThreshold' | 'keepBudgetTokens' | 'keepBudgetThreshold'>,
 ): Set<string> {
   const ranked = calls
     .flatMap((call) => {
       const p = answers.get(call.id)?.keepResult;
-      if (call.pinned || p === undefined) return [];
+      const cost = keepCosts.get(call.id) ?? 0;
+      if (call.pinned || p === undefined || cost <= 0) return [];
       if (p < options.keepBudgetThreshold || p >= options.keepThreshold) return [];
-      const tokens = resultTokens.get(call.id) ?? 0;
-      return [{ id: call.id, tokens, perToken: p / Math.max(1, tokens) }];
+      return [{ id: call.id, cost, p }];
     })
-    .sort((a, b) => b.perToken - a.perToken);
+    .sort((a, b) => b.p - a.p || a.cost - b.cost);
   const kept = new Set<string>();
   let used = 0;
-  for (const { id, tokens } of ranked) {
-    if (used + tokens > options.keepBudgetTokens) continue;
-    used += tokens;
+  for (const { id, cost } of ranked) {
+    if (used + cost > options.keepBudgetTokens) continue;
+    used += cost;
     kept.add(id);
   }
   return kept;
@@ -166,13 +182,13 @@ export function budgetKeeps(
 export function decideCalls(
   calls: readonly ToolCall[],
   answers: ReadonlyMap<string, CallAnswer>,
-  resultTokens: ReadonlyMap<string, number>,
+  keepCosts: ReadonlyMap<string, number>,
   options: Pick<
     ResolvedCompactOptions,
     'keepThreshold' | 'dropCallThreshold' | 'keepBudgetTokens' | 'keepBudgetThreshold'
   >,
 ): CallDecision[] {
-  const budgeted = budgetKeeps(calls, answers, resultTokens, options);
+  const budgeted = budgetKeeps(calls, answers, keepCosts, options);
   return calls.map((call) => {
     const answer = answers.get(call.id) ?? { keepCall: 1, keepResult: 1 };
     if (!budgeted.has(call.id)) return decideCall(call, answer, options);
@@ -180,14 +196,20 @@ export function decideCalls(
   });
 }
 
-/** Estimated tokens of each call's full result text. */
-function resultTokens(messages: readonly Message[], calls: readonly ToolCall[]): Map<string, number> {
+/** Estimated tokens keeping each call's full result adds over its truncated form. */
+function keepCosts(
+  messages: readonly Message[],
+  calls: readonly ToolCall[],
+  headChars: number,
+): Map<string, number> {
   return new Map(
     calls.map((call) => {
       const result = messages[call.resultIndex]?.toolResults?.find(
         (r) => r.tool_use_id === call.tool_use_id,
       );
-      return [call.id, estimateTokens(result?.text ?? '')];
+      const text = result?.text ?? '';
+      const truncated = truncatedResultText(text, call.isError, headChars);
+      return [call.id, Math.max(0, estimateTokens(text) - estimateTokens(truncated))];
     }),
   );
 }
@@ -316,6 +338,23 @@ export function messageChars(message: Message): number {
   return total;
 }
 
+/** Estimated tokens of the text, tool input and tool output of a transcript. */
+export function transcriptTokens(messages: readonly Message[]): number {
+  let total = 0;
+  for (const message of messages) {
+    total += estimateTokens(message.text);
+    for (const tool of message.toolUses) {
+      try {
+        total += estimateTokens(JSON.stringify(tool.input));
+      } catch {
+        total += 20;
+      }
+    }
+    for (const result of message.toolResults ?? []) total += estimateTokens(result.text);
+  }
+  return total;
+}
+
 export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   const { charsBefore, charsAfter } = result.stats;
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
@@ -357,7 +396,12 @@ export async function compact(
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }
 
-  const decisions = decideCalls(calls, answers, resultTokens(messages, candidates), resolved);
+  const decisions = decideCalls(
+    calls,
+    answers,
+    keepCosts(messages, candidates, resolved.truncateHeadChars),
+    { ...resolved, keepBudgetTokens: keepBudgetFor(transcriptTokens(messages), resolved) },
+  );
   const kept = applyDecisions(
     messages,
     decisions,

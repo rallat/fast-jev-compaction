@@ -19,8 +19,14 @@
     "keepBudgetTokens": {
       "type": "number",
       "title": "Keep budget (tokens)",
-      "description": "Estimated tokens of tool results below the keep threshold that may still stay in full, likeliest per token first; 0 disables.",
+      "description": "Minimum keep budget: estimated tokens that tool results below the keep threshold may add over their truncated form by staying in full, likeliest first; 0 with a keep budget ratio of 0 disables.",
       "default": 1500
+    },
+    "keepBudgetRatio": {
+      "type": "number",
+      "title": "Keep budget ratio",
+      "description": "Share of the session's estimated tokens the keep budget grows to when that is more than the keep budget tokens.",
+      "default": 0.05
     },
     "keepBudgetThreshold": {
       "type": "number",

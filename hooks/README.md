@@ -11,8 +11,9 @@ conversation as `state` (tool outputs replaced by a one-line note) and, for
 every tool call outside the pinned first and newest messages, two questions:
 whether the call should stay and whether its full output should stay. A
 result stays in full when Jev's probability reaches `keepThreshold`, or when
-the keep budget takes it (likeliest per token first, within
-`keepBudgetTokens`). Any other result is truncated to its first
+the keep budget takes it (likeliest first, charged only what the full
+output adds over its truncated form, within `keepBudgetRatio` of the session
+or `keepBudgetTokens`, whichever is larger). Any other result is truncated to its first
 `truncateHeadChars` characters plus a one-line note, and a call disappears
 with its result only when its own probability is below `dropCallThreshold`.
 
@@ -52,6 +53,7 @@ The plugin declares these `userConfig` values in
 | --- | ---: |
 | `keepThreshold` | `0.7` |
 | `keepBudgetTokens` | `1500` |
+| `keepBudgetRatio` | `0.05` |
 | `keepBudgetThreshold` | `0.2` |
 | `dropCallThreshold` | `0.3` |
 | `preserveRecentMessages` | `6` |
