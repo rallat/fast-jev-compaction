@@ -87,6 +87,19 @@ describe('hook config', () => {
     expect(resolveHookConfig({ compactTriggers: 'none' }).compactTriggers).toEqual([]);
     expect(resolveHookConfig({ compactSubagents: 'yes' }).compactSubagents).toBe(false);
   });
+
+  it('matches trigger names in any case and keeps the defaults when none is recognised', () => {
+    expect(resolveHookConfig({ compactTriggers: 'Manual, AUTO' }).compactTriggers).toEqual([
+      'manual',
+      'auto',
+    ]);
+    expect(resolveHookConfig({ compactTriggers: ' None ' }).compactTriggers).toEqual([]);
+    expect(resolveHookConfig({ compactTriggers: 'manaul,atuo' }).compactTriggers).toEqual([
+      'manual',
+      'auto',
+      'plugin',
+    ]);
+  });
 });
 
 describe('compaction routing', () => {

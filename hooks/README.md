@@ -68,13 +68,21 @@ Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
 library; see the root README for what they do.
 
 `compactTriggers` lists the `session.compact` triggers that go through Jev;
-any other trigger is handed to the built-in compaction. `precompute` (the
-engine computing a compaction ahead of time, kept for the one that comes) is
-not listed by default: while `auto` is listed it is vetoed with `{ skip }`, so
-no Jev call and no built-in summary is spent on a speculative run and the real
-compaction still comes through Jev. A subagent's or fork's own transcript
-(`agentId` set) goes to the built-in compaction unless `compactSubagents` is
-on. Text typed after `/compact` is appended to the goal Jev sees. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+any other trigger is handed to the built-in compaction. Names match in any
+case. `none` turns Jev off; a value with no known trigger name in it keeps the
+default. `precompute` (the engine computing a compaction ahead of time, kept
+for the one that comes) is not listed by default: while `auto` is listed it is
+vetoed with `{ skip }`, so no Jev call and no built-in summary is spent on a
+speculative run and the real compaction still comes through Jev.
+
+A subagent's or fork's own transcript (`agentId` set) goes to the built-in
+compaction unless `compactSubagents` is on. The default trades cost for
+egress: it sends no subagent transcript to TypeSafe, but those compactions
+use the more expensive LLM summary. Turn `compactSubagents` on if cost
+matters more than egress. Text typed after `/compact` is appended to the goal
+Jev sees.
+
+The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

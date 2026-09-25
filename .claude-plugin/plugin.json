@@ -37,13 +37,13 @@
     "compactTriggers": {
       "type": "string",
       "title": "Jev compaction triggers",
-      "description": "Comma list of session.compact triggers that go through Jev (manual, auto, plugin, precompute); the others use the built-in summary. While auto is listed and precompute is not, precompute is skipped. \"none\" turns Jev off.",
+      "description": "Comma list of session.compact triggers that go through Jev (manual, auto, plugin, precompute; any case); the others use the built-in summary. While auto is listed and precompute is not, precompute is skipped. \"none\" turns Jev off; a value with no known name keeps the default.",
       "default": "manual,auto,plugin"
     },
     "compactSubagents": {
       "type": "boolean",
       "title": "Compact subagent transcripts",
-      "description": "Also run Jev on a subagent's or fork's own transcript; off leaves them to the built-in summary.",
+      "description": "Also run Jev on a subagent's or fork's own transcript; off leaves them to the built-in summary (no TypeSafe egress, but a costlier LLM summary).",
       "default": false
     },
     "maxStateTokens": {

@@ -69,8 +69,10 @@ function optionString(options: PluginOptions, key: string): string | undefined {
 }
 
 /**
- * Reads `compactTriggers` as a comma list (or a list) of trigger names; names
- * that are not triggers are ignored, so `none` turns Jev off everywhere.
+ * Reads `compactTriggers` as a comma list (or a list) of trigger names in any
+ * case; names that are not triggers are ignored. `none` turns Jev off
+ * everywhere; any other value with no trigger in it keeps the defaults, so a
+ * typo cannot silently hand every compaction back to the built-in summary.
  */
 function optionTriggers(options: PluginOptions): SessionCompactTrigger[] {
   const value = options['compactTriggers'];
@@ -81,8 +83,10 @@ function optionTriggers(options: PluginOptions): SessionCompactTrigger[] {
         ? (value as readonly string[])
         : undefined;
   if (!names) return [...HOOK_DEFAULTS.compactTriggers];
-  const wanted = new Set(names.map((name) => name.trim()));
-  return COMPACT_TRIGGERS.filter((trigger) => wanted.has(trigger));
+  const wanted = new Set(names.map((name) => name.trim().toLowerCase()));
+  const triggers = COMPACT_TRIGGERS.filter((trigger) => wanted.has(trigger));
+  if (triggers.length === 0 && !wanted.has('none')) return [...HOOK_DEFAULTS.compactTriggers];
+  return triggers;
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
