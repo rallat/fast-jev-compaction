@@ -1,0 +1,675 @@
+{
+ "name": "add-baseurl",
+ "description": "Feature work: add a baseUrl plugin option. The final request (a PR description quoting the pre-existing test failure) needs the exact assertion, which only appears in tool outputs.",
+ "preserveRecentMessages": 6,
+ "facts": [
+  {
+   "name": "constraint: generated types file",
+   "needle": "types/claude-code.d.ts"
+  },
+  {
+   "name": "constraint: no version bump",
+   "needle": "do not bump the version"
+  },
+  {
+   "name": "exact failing assertion",
+   "needle": "expected 4097 to be less than or equal to 4096"
+  },
+  {
+   "name": "failure location",
+   "needle": "tests/hook.test.ts:139"
+  },
+  {
+   "name": "endpoint confirmed",
+   "needle": "https://openrouter.ai/api/v1/systemone"
+  },
+  {
+   "name": "diff stat: 4 files, 24 insertions",
+   "needle": "4 files changed, 24 insertions(+), 3 deletions(-)"
+  },
+  {
+   "name": "new test name",
+   "needle": "passes baseUrl through to the request"
+  },
+  {
+   "name": "typecheck fix: optional param",
+   "needle": "baseUrl?: string): JevAsker"
+  }
+ ],
+ "messages": [
+  {
+   "role": "user",
+   "text": "The fast-jev-compaction plugin hard-codes the TypeSafe endpoint. Add a `baseUrl` plugin option so it can call Jev through OpenRouter (https://openrouter.ai/api/v1/systemone). Keep the default unchanged. Don't edit types/claude-code.d.ts, it's generated.",
+   "toolUses": []
+  },
+  {
+   "role": "assistant",
+   "text": "I'll start with the repo layout and recent history.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_01",
+     "tool": "Bash",
+     "input": {
+      "command": "ls -la",
+      "description": "List repository files"
+     }
+    },
+    {
+     "tool_use_id": "toolu_02",
+     "tool": "Bash",
+     "input": {
+      "command": "git log --oneline -5",
+      "description": "Show recent commits"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_01",
+     "text": "total 96\ndrwxr-xr-x  17 dev  staff    544 Sep 25 10:02 .\ndrwxr-xr-x   5 dev  staff    160 Sep 25 10:01 ..\ndrwxr-xr-x   4 dev  staff    128 Sep 25 10:02 .claude-plugin\n-rw-r--r--   1 dev  staff     43 Sep 25 10:02 .gitignore\n-rw-r--r--   1 dev  staff   1069 Sep 25 10:02 LICENSE\n-rw-r--r--   1 dev  staff   9183 Sep 25 10:02 README.md\ndrwxr-xr-x   3 dev  staff     96 Sep 25 10:02 demo\ndrwxr-xr-x   3 dev  staff     96 Sep 25 10:02 examples\ndrwxr-xr-x   5 dev  staff    160 Sep 25 10:02 hooks\ndrwxr-xr-x 212 dev  staff   6784 Sep 25 10:03 node_modules\n-rw-r--r--   1 dev  staff  71544 Sep 25 10:03 package-lock.json\n-rw-r--r--   1 dev  staff    812 Sep 25 10:02 package.json\ndrwxr-xr-x   9 dev  staff    288 Sep 25 10:02 src\ndrwxr-xr-x   4 dev  staff    128 Sep 25 10:02 tests\n-rw-r--r--   1 dev  staff    336 Sep 25 10:02 tsconfig.hooks.json\n-rw-r--r--   1 dev  staff    355 Sep 25 10:02 tsconfig.json\ndrwxr-xr-x   3 dev  staff     96 Sep 25 10:02 types",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_02",
+     "text": "e3f262a Merge pull request #17 from tamaratran/devin/1789683249-readme-tagline\nf8ca877 README: update tagline to the current tool-call scoring design\n6e1da50 Merge pull request #16 from tamaratran/devin/1789680966-chunk-decision-log\n0e10353 Split the per-call decision log into ui.log lines under the 4096-char host limit\nf33a8ed Merge pull request #13 from tamaratran/devin/1789635912-token-estimate-and-result-head",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Reading the README first, then the hook.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_03",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/README.md"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_03",
+     "text": "     1\t# fast-jev-compaction\n     2\t\n     3\tClaude Code plugin that replaces the compaction summary with Jev decisions:\n     4\tevery tool call and result is scored in one fast request, stale ones are\n     5\tdropped or truncated, everything kept stays verbatim. Also usable as an npm\n     6\tlibrary.\n     7\t\n     8\t## What and why\n     9\t\n    10\tMost context compaction asks an LLM to summarize old turns. A summary is\n    11\tlossy: a file path, exact error, constraint, or command can disappear even when\n    12\tit matters later. This library never rewrites anything. It only deletes tool\n    13\tcalls and tool results Jev says are no longer needed, and it asks Jev while\n    14\tshowing it the whole conversation. User and assistant text stays verbatim and\n    15\tin order.\n    16\t\n    17\tThe repository is both an npm package (`src/`) and a Claude Code plugin\n    18\t(`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's\n    19\tbuilt-in compaction summary with the original messages.\n    20\t\n    21\t## How it works\n    22\t\n    23\t1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in\n    24\t   the first message or in the newest `preserveRecentMessages` messages are\n    25\t   pinned and never touched.\n    26\t2. The **state** sent to Jev is the whole conversation so far, oldest first,\n    27\t   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).\n    28\t   Tool inputs are included, texts are included, nothing is summarized.\n    29\t3. The state is fitted into `maxStateTokens` (25k by default) in stages, each\n    30\t   applied only if the previous one was not enough: tool inputs truncated to\n    31\t   1000, then 200, then 60 characters; long texts abridged to head + tail,\n    32\t   oldest non-pinned messages first; old non-pinned messages collapsed to a\n    33\t   `[… N chars omitted …]` note; old tool calls reduced to one line each\n    34\t   (`t12 Read file_path=src/a.ts → ok 480ch`); old call-less messages left\n    35\t   out; runs of old call-only messages folded into one entry. If it still\n    36\t   does not fit, compaction throws. Tokens are estimated without a tokenizer (a\n    37\t   word per six letters, half a token per digit, ~one per other symbol),\n    38\t   calibrated to land a little above the counts Jev reports.\n    39\t4. For every non-pinned call Jev gets two `noul` questions: should the **call**\n    40\t   stay (knowing it was made, with its input, still matters), and should the\n    41\t   **result** stay verbatim (its contents are still needed and re-running the\n    42\t   tool would not do).\n    43\t5. Questions are split into as many requests as needed so state plus questions\n    44\t   stays under `maxRequestTokens` (30k by default, under Jev's 32k request\n    45\t   limit). The same full state is resent with every request; requests run\n    46\t   concurrently and their answers are merged.\n    47\t6. Decisions per call, against `keepThreshold`:\n    48\t   - `keepResult ≥ threshold` → keep call and result;\n    49\t   - else `keepCall ≥ threshold` → keep the call, truncate the result to its\n    50\t     first `truncateHeadChars` characters plus a one-line note;\n    51\t   - else → remove the call together with its result.\n    52\t7. The message list is rebuilt: a message that loses all its content is\n    53\t   removed, untouched messages are returned as the same objects, and no result\n    54\t   is ever left without its call.\n    55\t\n    56\tJev failures, malformed answers, a missing key, or a history that cannot be\n    57\tfitted throw; the caller (or the Claude Code hook) decides what to fall back to.\n    58\t\n    59\t## Install and usage\n    60\t\n    61\t```sh\n    62\tnpm install fast-jev-compaction\n    63\texport TYPESAFE_API_KEY=...\n    64\t```\n    65\t\n    66\t```ts\n    67\timport { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';\n    68\t\n    69\tconst transcript: Message[] = [\n    70\t  { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },\n    71\t  {\n    72\t    role: 'assistant',\n    73\t    text: '',\n    74\t    toolUses: [{ tool_use_id: 'toolu_1', tool: 'Read', input: { file_path: 'src/a.ts' } }],\n    75\t  },\n    76\t  { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'toolu_1', text: '…file…' }] },\n    77\t  // …\n    78\t];\n    79\t\n    80\tconst result = await compactMessages(transcript, { preserveRecentMessages: 4 });\n    81\tconsole.log(result.messages, result.decisions, result.stats);\n    82\tif (reductionRatio(result) < 0.25) {\n    83\t  // not worth it: keep the original transcript, or summarize instead\n    84\t}\n    85\t```\n    86\t\n    87\t`Message` is a subset of Claude Code's `SessionMessage`, so a session transcript\n    88\tcan be passed in as is.\n    89\t\n    90\tTo bring your own transport, implement `JevAsker` (one `ask(state, questions)`\n    91\tmethod) and call `compact(messages, asker, options)`; `buildJevRequest` and\n    92\t`parseJevResponse` give you the HTTP request body and response validation.\n    93\tThe building blocks (`collectToolCalls`, `fitState`, `batchCalls`,\n    94\t`decideCall`, `applyDecisions`) are exported too.\n    95\t\n    96\t`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or\n    97\tput it in a source file.\n    98\t\n    99\t## Options\n   100\t\n   101\t| Option | Default | Description |\n   102\t| --- | --- | --- |\n   103\t| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |\n   104\t| `model` | `jev-latest` | Jev model name |\n   105\t| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |\n   106\t| `fetch` | native `fetch` | Injectable fetch implementation for tests |\n   107\t| `goal` | last 3 user prompts | Ongoing task description included in the state |\n   108\t| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |\n   109\t| `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |\n   110\t| `maxStateTokens` | `25000` | Estimated token ceiling for the state |\n   111\t| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |\n   112\t| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |\n   113\t\n   114\t`result.stats` reports message and character counts before and after, the\n   115\tper-reason decision counts, the state size in estimated tokens, which fitting\n   116\tstage was needed, and the number of requests.\n   117\t\n   118\t## Limitations\n   119\t\n   120\t- Only tool calls and results are candidates; text messages are never removed\n   121\t  or shortened in the output (they are only abridged in the state Jev sees).\n   122\t- Token sizes are estimates from character counts, not a tokenizer.\n   123\t- Calibration is at the request level; a probability is not a proof that a\n   124\t  result is safe to delete. The assistant can always re-run the tool.\n   125\t- The full state is repeated with every request, so a history near the state\n   126\t  ceiling costs one request per handful of questions.\n   127\t\n   128\t## Claude Code plugin\n   129\t\n   130\tThe repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`\n   131\tis a thin adapter that feeds `session.compact` transcripts through `src/` and\n   132\tfalls back to Claude Code's built-in summary on errors or insufficient\n   133\treduction. See [`hooks/README.md`](hooks/README.md) for configuration and the\n   134\tClaude Code 2.1.274 type reference.\n   135\t\n   136\t### Install in Claude Code\n   137\t\n   138\tFunction hooks are an early-access Claude Code feature (2.1.274+), so the\n   139\topt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:\n   140\t\n   141\t```json\n   142\t{ \"env\": { \"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS\": \"1\", \"TYPESAFE_API_KEY\": \"<your key>\" } }\n   143\t```\n   144\t\n   145\tThen add this repository as a plugin marketplace and install the plugin,\n   146\teither from the shell or as slash commands inside a session:\n   147\t\n   148\t```sh\n   149\tclaude plugin marketplace add tamaratran/fast-jev-compaction\n   150\tclaude plugin install fast-jev-compaction@fast-jev-compaction\n   151\t```\n   152\t\n   153\tThe install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,\n   154\t…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.\n   155\tRestart Claude Code or run `/reload-plugins`. From then on `/compact` (and\n   156\tauto-compaction) goes through Jev: the toast reads\n   157\t`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history\n   158\treplaced the built-in summary, or `fallback to built-in summary (…)` when Jev\n   159\tcould not remove enough (short sessions, or when it fails).\n   160\t\n   161\tTo run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`\n   162\tfrom the repository root. No publishing step is required; the marketplace is\n   163\tjust the repo's `.claude-plugin/marketplace.json`.\n   164\t\n   165\t## Development\n   166\t\n   167\t```sh\n   168\tnpm install\n   169\tnpm run typecheck        # library + hook\n   170\tnpm test\n   171\tnpm run build\n   172\tnpm run validate:plugin  # claude plugin validate\n   173\tTYPESAFE_API_KEY=\"$(cat ~/.typesafe_key)\" npm run demo\n   174\t```\n   175\t\n   176\tThe unit tests use a fake Jev and never contact TypeSafe. The demo is the live\n   177\tnetwork check.\n   178\t\n   179\t## Animated demo (macOS)\n   180\t\n   181\t`demo/JevDemo` is a small native SwiftUI app that plays a scripted, dramatized\n   182\tversion of the compaction flow inside a Claude Code-style terminal: the tool\n   183\tcalls of a canned transcript are scored, results and calls Jev lets go turn red\n   184\tand collapse away, and the rest stays verbatim. It never calls the API; it\n   185\texists to be screen recorded.\n   186\t\n   187\t```sh\n   188\tdemo/JevDemo/build.sh   # builds demo/JevDemo/build/JevDemo.app and launches it\n   189\t```\n   190\t\n   191\tPress space in the app to replay from the start.\n   192\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_04",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_04",
+     "text": "     1\timport type {\n     2\t  On,\n     3\t  PluginOptions,\n     4\t  Register,\n     5\t  SessionMessage,\n     6\t  ToolResultSummary,\n     7\t  ToolUseSummary,\n     8\t  TurnCompleteInput,\n     9\t} from 'claude-code';\n    10\t\n    11\timport { compact, reductionRatio, resolveOptions } from '../src/compact.js';\n    12\timport { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';\n    13\timport type {\n    14\t  CompactOptions,\n    15\t  CompactResult,\n    16\t  JevAsker,\n    17\t  Message,\n    18\t  ToolResult,\n    19\t  ToolUse,\n    20\t} from '../src/types.js';\n    21\t\n    22\tconst HOOK_DEFAULTS = {\n    23\t  compactAtPercent: 60,\n    24\t  minReductionRatio: 0.25,\n    25\t  model: DEFAULT_MODEL,\n    26\t};\n    27\t\n    28\texport type HookFetchInit = {\n    29\t  method?: string;\n    30\t  headers?: Record<string, string>;\n    31\t  body?: string;\n    32\t};\n    33\t\n    34\texport type HookFetchResponse = {\n    35\t  status: number;\n    36\t  ok: boolean;\n    37\t  text: string;\n    38\t};\n    39\t\n    40\t/** The shape of `$.http.fetch`, so the hook can be driven without an engine. */\n    41\texport type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;\n    42\t\n    43\texport type HookConfig = CompactOptions & {\n    44\t  apiKey?: string;\n    45\t  compactAtPercent: number;\n    46\t  minReductionRatio: number;\n    47\t  model: string;\n    48\t};\n    49\t\n    50\tfunction optionNumber(options: PluginOptions, key: string, fallback: number): number {\n    51\t  const value = options[key];\n    52\t  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;\n    53\t}\n    54\t\n    55\tfunction optionString(options: PluginOptions, key: string): string | undefined {\n    56\t  const value = options[key];\n    57\t  return typeof value === 'string' && value.length > 0 ? value : undefined;\n    58\t}\n    59\t\n    60\t/** Reads the plugin's `userConfig` values; anything missing takes the defaults. */\n    61\texport function resolveHookConfig(options: PluginOptions): HookConfig {\n    62\t  const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};\n    63\t  for (const key of [\n    64\t    'keepThreshold',\n    65\t    'preserveRecentMessages',\n    66\t    'maxStateTokens',\n    67\t    'maxRequestTokens',\n    68\t    'truncateHeadChars',\n    69\t  ] as const) {\n    70\t    const value = options[key];\n    71\t    if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;\n    72\t  }\n    73\t  const config: HookConfig = {\n    74\t    ...numbers,\n    75\t    compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),\n    76\t    minReductionRatio: optionNumber(\n    77\t      options,\n    78\t      'minReductionRatio',\n    79\t      HOOK_DEFAULTS.minReductionRatio,\n    80\t    ),\n    81\t    model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,\n    82\t  };\n    83\t  const apiKey = optionString(options, 'apiKey');\n    84\t  if (apiKey) config.apiKey = apiKey;\n    85\t  const goal = optionString(options, 'goal');\n    86\t  if (goal) config.goal = goal;\n    87\t  return config;\n    88\t}\n    89\t\n    90\t/** A `JevAsker` over the engine's `$.http.fetch`. */\n    91\texport function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {\n    92\t  return {\n    93\t    async ask(state, questions) {\n    94\t      const request = buildJevRequest({ apiKey, model }, state, questions);\n    95\t      const response = await fetchFn(request.url, {\n    96\t        method: request.method,\n    97\t        headers: request.headers,\n    98\t        body: request.body,\n    99\t      });\n   100\t      return parseJevResponse(response.status, response.ok, response.text);\n   101\t    },\n   102\t  };\n   103\t}\n   104\t\n   105\tfunction toolUseSummary(tool: ToolUse): ToolUseSummary {\n   106\t  const summary: ToolUseSummary = {\n   107\t    tool_use_id: tool.tool_use_id,\n   108\t    tool: tool.tool,\n   109\t    input: tool.input,\n   110\t  };\n   111\t  if (tool.text !== undefined) summary.text = tool.text;\n   112\t  if (tool.isError) summary.isError = true;\n   113\t  return summary;\n   114\t}\n   115\t\n   116\tfunction toolResultSummary(result: ToolResult): ToolResultSummary {\n   117\t  return {\n   118\t    tool_use_id: result.tool_use_id,\n   119\t    text: result.text,\n   120\t    isError: result.isError ?? false,\n   121\t  };\n   122\t}\n   123\t\n   124\t/**\n   125\t * Maps the library's output back onto session messages. Whatever came back\n   126\t * unchanged (a message, a tool use, a tool result) is the engine's own object,\n   127\t * handle included; anything rebuilt is a fresh message without a handle, so the\n   128\t * engine takes the edited content instead of its original.\n   129\t */\n   130\texport function toSessionMessages(\n   131\t  input: readonly SessionMessage[],\n   132\t  output: readonly Message[],\n   133\t): SessionMessage[] {\n   134\t  const messages = new Map<Message, SessionMessage>();\n   135\t  const uses = new Map<ToolUse, ToolUseSummary>();\n   136\t  const results = new Map<ToolResult, ToolResultSummary>();\n   137\t  for (const message of input) {\n   138\t    messages.set(message, message);\n   139\t    for (const tool of message.toolUses) uses.set(tool, tool);\n   140\t    for (const result of message.toolResults ?? []) results.set(result, result);\n   141\t  }\n   142\t  return output.map((message) => {\n   143\t    const own = messages.get(message);\n   144\t    if (own) return own;\n   145\t    const rebuilt: SessionMessage = {\n   146\t      role: message.role,\n   147\t      text: message.text,\n   148\t      toolUses: message.toolUses.map((tool) => uses.get(tool) ?? toolUseSummary(tool)),\n   149\t    };\n   150\t    if (message.toolResults && message.toolResults.length > 0) {\n   151\t      rebuilt.toolResults = message.toolResults.map(\n   152\t        (result) => results.get(result) ?? toolResultSummary(result),\n   153\t      );\n   154\t    }\n   155\t    return rebuilt;\n   156\t  });\n   157\t}\n   158\t\n   159\texport type SessionCompaction = {\n   160\t  result: CompactResult;\n   161\t  messages: SessionMessage[];\n   162\t};\n   163\t\n   164\t/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */\n   165\texport async function compactSession(\n   166\t  messages: readonly SessionMessage[],\n   167\t  config: HookConfig,\n   168\t  fetchFn: HookFetch,\n   169\t): Promise<SessionCompaction> {\n   170\t  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');\n   171\t  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);\n   172\t  return { result, messages: toSessionMessages(messages, result.messages) };\n   173\t}\n   174\t\n   175\tfunction percent(ratio: number): string {\n   176\t  return `${Math.round(ratio * 100)}%`;\n   177\t}\n   178\t\n   179\texport function summarize(result: CompactResult): string {\n   180\t  const { stats } = result;\n   181\t  const parts = [\n   182\t    stats.kept > 0 ? `${stats.kept} kept` : '',\n   183\t    stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',\n   184\t    stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',\n   185\t    stats.pinned > 0 ? `${stats.pinned} pinned` : '',\n   186\t  ].filter(Boolean);\n   187\t  return `${percent(reductionRatio(result))} reduction; ${\n   188\t    parts.join(', ') || 'no tool calls'\n   189\t  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;\n   190\t}\n   191\t\n   192\tconst UI_LOG_MAX_CHARS = 4096;\n   193\t\n   194\texport function decisionLog(result: CompactResult): string {\n   195\t  return result.decisions\n   196\t    .filter((d) => d.reason !== 'pinned')\n   197\t    .map(\n   198\t      (d) =>\n   199\t        `${d.id}:${d.tool}:${d.action}/call=${d.keepCall.toFixed(2)}/result=${d.keepResult.toFixed(2)}`,\n   200\t    )\n   201\t    .join(' ');\n   202\t}\n   203\t\n   204\texport function decisionLogLines(\n   205\t  result: CompactResult,\n   206\t  maxChars: number = UI_LOG_MAX_CHARS,\n   207\t): string[] {\n   208\t  const entries = decisionLog(result).split(' ').filter(Boolean);\n   209\t  if (entries.length === 0) return ['decisions: (none)'];\n   210\t  const chunks: string[] = [];\n   211\t  let current = '';\n   212\t  for (const entry of entries) {\n   213\t    const next = current ? `${current} ${entry}` : entry;\n   214\t    if (current && next.length > maxChars - 24) {\n   215\t      chunks.push(current);\n   216\t      current = entry;\n   217\t    } else current = next;\n   218\t  }\n   219\t  chunks.push(current);\n   220\t  return chunks.map((chunk, index) =>\n   221\t    chunks.length === 1\n   222\t      ? `decisions: ${chunk}`\n   223\t      : `decisions (${index + 1}/${chunks.length}): ${chunk}`,\n   224\t  );\n   225\t}\n   226\t\n   227\tasync function getApiKey(\n   228\t  $: {\n   229\t    env: { get: (name: string) => Promise<string | undefined> };\n   230\t    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };\n   231\t  },\n   232\t  config: HookConfig,\n   233\t): Promise<string | undefined> {\n   234\t  if (config.apiKey) return config.apiKey;\n   235\t  const fromEnv = await $.env.get('TYPESAFE_API_KEY');\n   236\t  if (fromEnv) return fromEnv;\n   237\t  const settings = await $.settings.read();\n   238\t  const env = settings['env'];\n   239\t  if (env && typeof env === 'object') {\n   240\t    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];\n   241\t    if (typeof value === 'string' && value) return value;\n   242\t  }\n   243\t  return undefined;\n   244\t}\n   245\t\n   246\tfunction notify(\n   247\t  $: {\n   248\t    ui: {\n   249\t      log: (text: string) => void;\n   250\t      toast: (text: string, options?: { timeoutMs?: number }) => void;\n   251\t    };\n   252\t  },\n   253\t  text: string,\n   254\t): void {\n   255\t  $.ui.log(text);\n   256\t  $.ui.toast(text, { timeoutMs: 15_000 });\n   257\t}\n   258\t\n   259\texport const register: Register = (on: On, options: PluginOptions) => {\n   260\t  const configured = resolveHookConfig(options);\n   261\t  let compacting = false;\n   262\t\n   263\t  on('session.compact', async ($, event, next) => {\n   264\t    try {\n   265\t      const config = { ...configured, apiKey: await getApiKey($, configured) };\n   266\t      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {\n   267\t        const response = await $.http.fetch(url, init);\n   268\t        return { status: response.status, ok: response.ok, text: response.text };\n   269\t      });\n   270\t      for (const line of decisionLogLines(result)) $.ui.log(line);\n   271\t      if (reductionRatio(result) < config.minReductionRatio) {\n   272\t        notify(\n   273\t          $,\n   274\t          `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,\n   275\t        );\n   276\t        return next(event);\n   277\t      }\n   278\t      notify(\n   279\t        $,\n   280\t        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,\n   281\t      );\n   282\t      return { messages };\n   283\t    } catch (error) {\n   284\t      notify(\n   285\t        $,\n   286\t        `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,\n   287\t      );\n   288\t      return next(event);\n   289\t    }\n   290\t  });\n   291\t\n   292\t  on('turn.complete', async ($, event: TurnCompleteInput, next) => {\n   293\t    if (compacting) return next(event);\n   294\t    try {\n   295\t      const { context } = await $.session.usage();\n   296\t      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);\n   297\t      compacting = true;\n   298\t      await $.session.compact();\n   299\t    } catch (error) {\n   300\t      $.ui.log(\n   301\t        `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,\n   302\t      );\n   303\t    } finally {\n   304\t      compacting = false;\n   305\t    }\n   306\t    return next(event);\n   307\t  });\n   308\t};\n   309\t\n   310\texport { resolveOptions };\n   311\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "The hook builds each request in `jevAsker` (line 94) with only `{ apiKey, model }`, so `buildJevRequest` always falls back to the TypeSafe URL. Checking request.ts for the parameter.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_05",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/src/request.ts"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_05",
+     "text": "     1\timport type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js';\n     2\t\n     3\texport const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';\n     4\texport const DEFAULT_MODEL = 'jev-latest';\n     5\t\n     6\texport interface JevRequest {\n     7\t  url: string;\n     8\t  method: 'POST';\n     9\t  headers: Record<string, string>;\n    10\t  body: string;\n    11\t}\n    12\t\n    13\t/** The HTTP request for one Jev call, for any fetch-like transport. */\n    14\texport function buildJevRequest(\n    15\t  params: {\n    16\t    apiKey: string;\n    17\t    model?: string;\n    18\t    baseUrl?: string;\n    19\t  },\n    20\t  state: JevState,\n    21\t  questions: JevQuestions,\n    22\t): JevRequest {\n    23\t  return {\n    24\t    url: params.baseUrl ?? SYSTEM_ONE_URL,\n    25\t    method: 'POST',\n    26\t    headers: {\n    27\t      authorization: `Bearer ${params.apiKey}`,\n    28\t      'content-type': 'application/json',\n    29\t    },\n    30\t    body: JSON.stringify({\n    31\t      model: params.model ?? DEFAULT_MODEL,\n    32\t      state,\n    33\t      questions,\n    34\t    }),\n    35\t  };\n    36\t}\n    37\t\n    38\t/** Validates a Jev response body; throws on anything but an `answers` object. */\n    39\texport function parseJevResponse(\n    40\t  status: number,\n    41\t  ok: boolean,\n    42\t  text: string,\n    43\t): JevResponse {\n    44\t  if (!ok) {\n    45\t    throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);\n    46\t  }\n    47\t  let parsed: unknown;\n    48\t  try {\n    49\t    parsed = JSON.parse(text);\n    50\t  } catch {\n    51\t    throw new Error('Jev returned malformed JSON');\n    52\t  }\n    53\t  if (\n    54\t    parsed === null ||\n    55\t    typeof parsed !== 'object' ||\n    56\t    !('answers' in parsed) ||\n    57\t    parsed.answers === null ||\n    58\t    typeof parsed.answers !== 'object'\n    59\t  ) {\n    60\t    throw new Error('Jev response is missing answers');\n    61\t  }\n    62\t  return parsed as JevResponse;\n    63\t}\n    64\t\n    65\t/** The `noul` probability of one answer; throws when it is not there. */\n    66\texport function noulAnswer(\n    67\t  answers: Record<string, JevAnswer>,\n    68\t  name: string,\n    69\t): number {\n    70\t  const answer = answers[name];\n    71\t  if (\n    72\t    !answer ||\n    73\t    !('noul' in answer) ||\n    74\t    typeof answer.noul !== 'number' ||\n    75\t    !Number.isFinite(answer.noul)\n    76\t  ) {\n    77\t    throw new Error(`Invalid Jev answer for ${name}`);\n    78\t  }\n    79\t  return answer.noul;\n    80\t}\n    81\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "`buildJevRequest` already accepts `baseUrl`. Looking for other uses.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_06",
+     "tool": "Grep",
+     "input": {
+      "pattern": "baseUrl",
+      "output_mode": "content",
+      "-n": true
+     }
+    },
+    {
+     "tool_use_id": "toolu_07",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/.claude-plugin/plugin.json"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_06",
+     "text": "src/request.ts:18:    baseUrl?: string;\nsrc/request.ts:24:    url: params.baseUrl ?? SYSTEM_ONE_URL,\nsrc/client.ts:10:  baseUrl?: string;\nsrc/client.ts:19:  private readonly baseUrl: string | undefined;\nsrc/client.ts:25:    this.baseUrl = options.baseUrl;\nsrc/client.ts:32:      { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },\nREADME.md:103:| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |\ntests/fast-jev-compaction.test.ts:398:      baseUrl: 'https://example.test/v1/systemone',",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_07",
+     "text": "     1\t{\n     2\t  \"name\": \"fast-jev-compaction\",\n     3\t  \"version\": \"0.3.0\",\n     4\t  \"description\": \"Verbatim Jev-guided compaction for Claude Code sessions.\",\n     5\t  \"license\": \"MIT\",\n     6\t  \"userConfig\": {\n     7\t    \"apiKey\": {\n     8\t      \"type\": \"string\",\n     9\t      \"title\": \"TypeSafe API key\",\n    10\t      \"description\": \"TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.\",\n    11\t      \"sensitive\": true\n    12\t    },\n    13\t    \"keepThreshold\": {\n    14\t      \"type\": \"number\",\n    15\t      \"title\": \"Keep threshold\",\n    16\t      \"description\": \"Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.\",\n    17\t      \"default\": 0.5\n    18\t    },\n    19\t    \"preserveRecentMessages\": {\n    20\t      \"type\": \"number\",\n    21\t      \"title\": \"Recent messages to preserve\",\n    22\t      \"description\": \"Number of newest messages pinned from compaction.\",\n    23\t      \"default\": 6\n    24\t    },\n    25\t    \"compactAtPercent\": {\n    26\t      \"type\": \"number\",\n    27\t      \"title\": \"Compaction percentage\",\n    28\t      \"description\": \"Context percentage at which turn.complete requests compaction.\",\n    29\t      \"default\": 60\n    30\t    },\n    31\t    \"minReductionRatio\": {\n    32\t      \"type\": \"number\",\n    33\t      \"title\": \"Minimum reduction ratio\",\n    34\t      \"description\": \"Minimum estimated character reduction required to replace history.\",\n    35\t      \"default\": 0.25\n    36\t    },\n    37\t    \"maxStateTokens\": {\n    38\t      \"type\": \"number\",\n    39\t      \"title\": \"Maximum Jev state tokens\",\n    40\t      \"description\": \"Estimated token budget for the conversation state sent with every Jev request.\",\n    41\t      \"default\": 25000\n    42\t    },\n    43\t    \"maxRequestTokens\": {\n    44\t      \"type\": \"number\",\n    45\t      \"title\": \"Maximum Jev request tokens\",\n    46\t      \"description\": \"Estimated token budget for state plus questions in one Jev request.\",\n    47\t      \"default\": 30000\n    48\t    },\n    49\t    \"truncateHeadChars\": {\n    50\t      \"type\": \"number\",\n    51\t      \"title\": \"Truncated tool result head\",\n    52\t      \"description\": \"Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.\",\n    53\t      \"default\": 300\n    54\t    },\n    55\t    \"model\": {\n    56\t      \"type\": \"string\",\n    57\t      \"title\": \"Jev model\",\n    58\t      \"description\": \"TypeSafe Jev model name.\",\n    59\t      \"default\": \"jev-latest\"\n    60\t    }\n    61\t  }\n    62\t}\n    63\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "Also: do not bump the version in plugin.json in this PR, release does that.",
+   "toolUses": []
+  },
+  {
+   "role": "assistant",
+   "text": "Understood, the version stays at 0.3.0. Running the suite for a baseline before changing anything.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_08",
+     "tool": "Bash",
+     "input": {
+      "command": "npm test",
+      "description": "Run the test suite"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_08",
+     "text": "> fast-jev-compaction@0.2.0 test\n> vitest run\n\n RUN  v2.1.8 /work/fast-jev-compaction\n\n ✓ tests/fast-jev-compaction.test.ts (23 tests) 44ms\n ❯ tests/hook.test.ts (6 tests | 1 failed) 21ms\n   ✓ hook config > reads userConfig values and falls back to defaults\n   ✓ session message mapping > returns the engine objects for untouched messages and handle-less copies for rebuilt ones\n   ✓ session message mapping > preserves short dropped-result messages and their handles\n   ✓ compactSession > runs the library over the engine fetch and reports the outcome\n   × compactSession > splits a long decision log into ui.log lines under the host limit 6ms\n     → expected 4097 to be less than or equal to 4096\n   ✓ compactSession > throws on a missing key and on failed requests so the hook falls back\n\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n FAIL  tests/hook.test.ts > compactSession > splits a long decision log into ui.log lines under the host limit\nAssertionError: expected 4097 to be less than or equal to 4096\n ❯ tests/hook.test.ts:139:31\n    137|     const lines = decisionLogLines(result);\n    138|     expect(lines.length).toBeGreaterThan(1);\n    139|     for (const line of lines) expect(line.length).toBeLessThanOrEqual(4096);\n       |                               ^\n    140|   });\n    141|\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n Test Files  1 failed | 1 passed (2)\n      Tests  1 failed | 28 passed (29)\n   Start at  10:14:02\n   Duration  633ms (transform 212ms, setup 0ms, collect 301ms, tests 65ms, environment 0ms, prepare 188ms)",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Baseline: 28 passing, 1 pre-existing failure in tests/hook.test.ts:139 (a decision-log line one char over the 4096 limit). It is unrelated to this change, so I'll leave it and mention it in the PR. Reading the hook tests and the shared types next.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_09",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/tests/hook.test.ts"
+     }
+    },
+    {
+     "tool_use_id": "toolu_10",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/src/types.ts"
+     }
+    },
+    {
+     "tool_use_id": "toolu_11",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/src/client.ts"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_09",
+     "text": "     1\timport { describe, expect, it } from 'vitest';\n     2\timport {\n     3\t  compactSession,\n     4\t  decisionLog,\n     5\t  decisionLogLines,\n     6\t  resolveHookConfig,\n     7\t  summarize,\n     8\t  toSessionMessages,\n     9\t} from '../hooks/fast-jev.ts';\n    10\timport { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';\n    11\t\n    12\ttype SessionMessage = Message & { handle?: string };\n    13\t\n    14\tfunction message(role: Message['role'], text: string, extra: Partial<SessionMessage> = {}): SessionMessage {\n    15\t  return { role, text, toolUses: [], ...extra };\n    16\t}\n    17\t\n    18\tfunction call(id: string, tool: string, input: Record<string, unknown>, text: string): SessionMessage {\n    19\t  return message('assistant', '', {\n    20\t    toolUses: [{ tool_use_id: id, tool, input, text }],\n    21\t    handle: `h-${id}`,\n    22\t  });\n    23\t}\n    24\t\n    25\tfunction result(id: string, text: string, isError = false): SessionMessage {\n    26\t  return message('user', '', { toolResults: [{ tool_use_id: id, text, isError }], handle: `r-${id}` });\n    27\t}\n    28\t\n    29\tconst fileA = 'export const a = 1;\\n'.repeat(50);\n    30\t\n    31\tfunction transcript(): SessionMessage[] {\n    32\t  return [\n    33\t    message('user', 'Fix the failing test.', { handle: 'h-0' }),\n    34\t    call('tool-1', 'Read', { file_path: 'src/a.ts' }, fileA),\n    35\t    result('tool-1', fileA),\n    36\t    call('tool-2', 'Bash', { command: 'npm test' }, 'FAIL'),\n    37\t    result('tool-2', 'FAIL b.test.ts: expected 2 to be 3', true),\n    38\t    message('assistant', 'Fixing now.', { handle: 'h-5' }),\n    39\t    message('user', 'go ahead', { handle: 'h-6' }),\n    40\t  ];\n    41\t}\n    42\t\n    43\tfunction jevFetch(answer: (name: string) => number, bodies: string[] = []) {\n    44\t  return async (_url: string, init?: { body?: string }) => {\n    45\t    bodies.push(init?.body ?? '');\n    46\t    const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown> };\n    47\t    const answers = Object.fromEntries(\n    48\t      Object.keys(questions).map((key) => [key, { type: 'noul', noul: answer(key) }]),\n    49\t    );\n    50\t    return { status: 200, ok: true, text: JSON.stringify({ answers }) };\n    51\t  };\n    52\t}\n    53\t\n    54\tdescribe('hook config', () => {\n    55\t  it('reads userConfig values and falls back to defaults', () => {\n    56\t    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });\n    57\t    expect(\n    58\t      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),\n    59\t    ).toEqual({\n    60\t      apiKey: 'k',\n    61\t      keepThreshold: 0.3,\n    62\t      maxStateTokens: 1000,\n    63\t      model: 'jev-x',\n    64\t      goal: 'g',\n    65\t      compactAtPercent: 60,\n    66\t      minReductionRatio: 0.25,\n    67\t    });\n    68\t  });\n    69\t});\n    70\t\n    71\tdescribe('session message mapping', () => {\n    72\t  it('returns the engine objects for untouched messages and handle-less copies for rebuilt ones', () => {\n    73\t    const messages = transcript();\n    74\t    const calls = collectToolCalls(messages, 0);\n    75\t    const decisions = [\n    76\t      decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 }),\n    77\t      decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.9 }, { keepThreshold: 0.5 }),\n    78\t    ];\n    79\t    messages[1]!.toolUses[0]!.text = 'x'.repeat(2000);\n    80\t    messages[2]!.toolResults![0]!.text = 'x'.repeat(2000);\n    81\t    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));\n    82\t    expect(out).toHaveLength(messages.length);\n    83\t    expect(out[0]).toBe(messages[0]);\n    84\t    expect(out[1]?.handle).toBeUndefined();\n    85\t    expect(out[1]?.toolUses[0]?.text).toMatch(\n    86\t      new RegExp(`^${'x'.repeat(300)}\\\\n\\\\[fast-jev-compaction truncated 1700 chars`),\n    87\t    );\n    88\t    expect(out[2]?.handle).toBeUndefined();\n    89\t    expect(out[2]?.toolResults?.[0]?.text).toMatch(\n    90\t      new RegExp(`^${'x'.repeat(300)}\\\\n\\\\[fast-jev-compaction truncated 1700 chars`),\n    91\t    );\n    92\t    expect(out[2]?.toolResults?.[0]).toMatchObject({ tool_use_id: 'tool-1', isError: false });\n    93\t    expect(out[3]).toBe(messages[3]);\n    94\t    expect(out[4]).toBe(messages[4]);\n    95\t  });\n    96\t\n    97\t  it('preserves short dropped-result messages and their handles', () => {\n    98\t    const messages = transcript();\n    99\t    messages[1]!.toolUses[0]!.text = 'y'.repeat(100);\n   100\t    messages[2]!.toolResults![0]!.text = 'y'.repeat(100);\n   101\t    const calls = collectToolCalls(messages, 0);\n   102\t    const decisions = [\n   103\t      decideCall(calls[0]!, { keepCall: 0.9, keepResult: 0.1 }, { keepThreshold: 0.5 }),\n   104\t      decideCall(calls[1]!, { keepCall: 0.9, keepResult: 0.9 }, { keepThreshold: 0.5 }),\n   105\t    ];\n   106\t    const out = toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));\n   107\t    expect(out[1]).toBe(messages[1]);\n   108\t    expect(out[2]).toBe(messages[2]);\n   109\t  });\n   110\t});\n   111\t\n   112\tdescribe('compactSession', () => {\n   113\t  it('runs the library over the engine fetch and reports the outcome', async () => {\n   114\t    const bodies: string[] = [];\n   115\t    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k', model: 'jev-x' };\n   116\t    const { result: output, messages } = await compactSession(\n   117\t      transcript(),\n   118\t      config,\n   119\t      jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1), bodies),\n   120\t    );\n   121\t    expect(bodies).toHaveLength(1);\n   122\t    expect(JSON.parse(bodies[0]!).model).toBe('jev-x');\n   123\t    expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);\n   124\t    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);\n   125\t    expect(summarize(output)).toMatch(/^\\d+% reduction; 1 kept, 1 call_dropped; state ~\\d+ tokens \\(full\\) in 1 request\\(s\\)$/);\n   126\t    expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');\n   127\t    expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);\n   128\t  });\n   129\t\n   130\t  it('splits a long decision log into ui.log lines under the host limit', async () => {\n   131\t    const config = { ...resolveHookConfig({ preserveRecentMessages: 1 }), apiKey: 'k' };\n   132\t    const { result: output } = await compactSession(transcript(), config, jevFetch(() => 0.1));\n   133\t    const lines = decisionLogLines(output, 60);\n   134\t    expect(lines).toEqual([\n   135\t      'decisions (1/2): t1:Read:drop_call/call=0.10/result=0.10',\n   136\t      'decisions (2/2): t2:Bash:drop_call/call=0.10/result=0.10',\n   137\t    ]);\n   138\t    expect(lines.every((line) => line.length <= 60)).toBe(true);\n   139\t    expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);\n   140\t  });\n   141\t\n   142\t  it('throws on a missing key and on failed requests so the hook falls back', async () => {\n   143\t    const config = resolveHookConfig({ preserveRecentMessages: 1 });\n   144\t    await expect(compactSession(transcript(), config, jevFetch(() => 0))).rejects.toThrow(/TYPESAFE_API_KEY/);\n   145\t    await expect(\n   146\t      compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),\n   147\t    ).rejects.toThrow(/500/);\n   148\t  });\n   149\t});\n   150\t",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_10",
+     "text": "     1\texport type Role = 'user' | 'assistant';\n     2\t\n     3\t/**\n     4\t * A tool_use block of an assistant message. `text` and `isError` mirror the\n     5\t * outcome once the transcript holds it (Claude Code attaches them).\n     6\t */\n     7\texport interface ToolUse {\n     8\t  tool_use_id: string;\n     9\t  tool: string;\n    10\t  input: Record<string, unknown>;\n    11\t  text?: string;\n    12\t  isError?: boolean;\n    13\t}\n    14\t\n    15\t/** A tool_result block of a user message. */\n    16\texport interface ToolResult {\n    17\t  tool_use_id: string;\n    18\t  text: string;\n    19\t  isError?: boolean;\n    20\t}\n    21\t\n    22\t/**\n    23\t * One transcript message. The shape is a subset of Claude Code's\n    24\t * `SessionMessage`, so a session transcript can be passed in as is.\n    25\t */\n    26\texport interface Message {\n    27\t  role: Role;\n    28\t  text: string;\n    29\t  toolUses: ToolUse[];\n    30\t  toolResults?: ToolResult[];\n    31\t}\n    32\t\n    33\t/** A tool call paired with its result by `tool_use_id`. */\n    34\texport interface ToolCall {\n    35\t  /** Short id used in the Jev state and question names (`t1`, `t2`, ...). */\n    36\t  id: string;\n    37\t  tool_use_id: string;\n    38\t  tool: string;\n    39\t  input: Record<string, unknown>;\n    40\t  /** Index of the message holding the tool_use block. */\n    41\t  callIndex: number;\n    42\t  /** Index of the message holding the tool_result block. */\n    43\t  resultIndex: number;\n    44\t  resultChars: number;\n    45\t  isError: boolean;\n    46\t  /** In the first or the newest preserved messages; never a candidate. */\n    47\t  pinned: boolean;\n    48\t}\n    49\t\n    50\texport interface CallAnswer {\n    51\t  /** Jev's probability that the call itself still matters. */\n    52\t  keepCall: number;\n    53\t  /** Jev's probability that the full result still needs to stay verbatim. */\n    54\t  keepResult: number;\n    55\t}\n    56\t\n    57\texport type CallAction = 'keep' | 'drop_result' | 'drop_call';\n    58\t\n    59\texport interface CallDecision extends CallAnswer {\n    60\t  id: string;\n    61\t  tool: string;\n    62\t  action: CallAction;\n    63\t  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';\n    64\t}\n    65\t\n    66\texport interface HistoryToolCall {\n    67\t  id: string;\n    68\t  tool: string;\n    69\t  input: string;\n    70\t  result: string;\n    71\t}\n    72\t\n    73\texport interface HistoryEntry {\n    74\t  i: number;\n    75\t  role: Role;\n    76\t  text: string;\n    77\t  /** Structured per call, or one compact line per call once the state has to shrink. */\n    78\t  tool_calls?: HistoryToolCall[] | string[];\n    79\t}\n    80\t\n    81\t/** The state sent with every Jev request: the whole history, results omitted. */\n    82\texport interface CompactionState {\n    83\t  context: string;\n    84\t  goal: string;\n    85\t  history: HistoryEntry[];\n    86\t}\n    87\t\n    88\texport interface FittedState {\n    89\t  state: CompactionState;\n    90\t  tokens: number;\n    91\t  /** Which fitting stage produced the state, for diagnostics. */\n    92\t  stage: string;\n    93\t}\n    94\t\n    95\texport interface CompactOptions {\n    96\t  /** Ongoing task description; defaults to the last few user prompts. */\n    97\t  goal?: string;\n    98\t  /** Minimum keep probability for a call or result to stay. Default 0.5. */\n    99\t  keepThreshold?: number;\n   100\t  /** Newest messages never touched (the first message is always kept). Default 6. */\n   101\t  preserveRecentMessages?: number;\n   102\t  /** Estimated token ceiling for the state. Default 25000. */\n   103\t  maxStateTokens?: number;\n   104\t  /** Estimated token ceiling for state plus one batch of questions. Default 30000. */\n   105\t  maxRequestTokens?: number;\n   106\t  /** Characters of a dropped tool result to retain. Default 300. */\n   107\t  truncateHeadChars?: number;\n   108\t}\n   109\t\n   110\texport interface ResolvedCompactOptions {\n   111\t  goal: string;\n   112\t  keepThreshold: number;\n   113\t  preserveRecentMessages: number;\n   114\t  maxStateTokens: number;\n   115\t  maxRequestTokens: number;\n   116\t  truncateHeadChars: number;\n   117\t}\n   118\t\n   119\texport interface CompactResult {\n   120\t  /** The compacted transcript; untouched messages are the input objects. */\n   121\t  messages: Message[];\n   122\t  decisions: CallDecision[];\n   123\t  stats: {\n   124\t    messagesBefore: number;\n   125\t    messagesAfter: number;\n   126\t    charsBefore: number;\n   127\t    charsAfter: number;\n   128\t    calls: number;\n   129\t    kept: number;\n   130\t    resultsDropped: number;\n   131\t    callsDropped: number;\n   132\t    pinned: number;\n   133\t    stateTokens: number;\n   134\t    /** Which fitting stage the state needed, '' when no request was made. */\n   135\t    stateStage: string;\n   136\t    requests: number;\n   137\t    ms: number;\n   138\t  };\n   139\t}\n   140\t\n   141\t/** The `state` of a Jev request: a string or any JSON-serialisable object. */\n   142\texport type JevState = string | object;\n   143\t\n   144\texport interface NoulQuestion {\n   145\t  type: 'noul';\n   146\t  instructions: string;\n   147\t  criteria?: {\n   148\t    true?: string;\n   149\t    false?: string;\n   150\t  };\n   151\t}\n   152\t\n   153\texport interface ChoiceQuestion {\n   154\t  type: 'choice';\n   155\t  instructions: string;\n   156\t  criteria: Record<string, string | null>;\n   157\t}\n   158\t\n   159\texport interface ScoreQuestion {\n   160\t  type: 'score';\n   161\t  instructions: string;\n   162\t  criteria: string[];\n   163\t}\n   164\t\n   165\texport type JevQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;\n   166\texport type JevQuestions = Record<string, JevQuestion>;\n   167\t\n   168\texport interface NoulAnswer {\n   169\t  type?: 'noul';\n   170\t  noul: number;\n   171\t}\n   172\t\n   173\texport interface ChoiceAnswer {\n   174\t  type?: 'choice';\n   175\t  choice: string;\n   176\t  confidence: number;\n   177\t  probabilities: Record<string, number>;\n   178\t}\n   179\t\n   180\texport interface ScoreAnswer {\n   181\t  type?: 'score';\n   182\t  score: number;\n   183\t  confidence: number;\n   184\t  probabilities: Record<string, number>;\n   185\t}\n   186\t\n   187\texport type JevAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;\n   188\t\n   189\texport interface JevResponse {\n   190\t  model?: string;\n   191\t  answers: Record<string, JevAnswer>;\n   192\t  usage?: {\n   193\t    input_tokens?: number;\n   194\t    output_tokens?: number;\n   195\t  };\n   196\t  [key: string]: unknown;\n   197\t}\n   198\t\n   199\t/** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */\n   200\texport interface JevAsker {\n   201\t  ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;\n   202\t}\n   203\t",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_11",
+     "text": "     1\timport { buildJevRequest, parseJevResponse } from './request.js';\n     2\timport type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';\n     3\t\n     4\texport interface JevClientOptions {\n     5\t  /** Defaults to `process.env.TYPESAFE_API_KEY`. */\n     6\t  apiKey?: string;\n     7\t  /** Defaults to `jev-latest`. */\n     8\t  model?: string;\n     9\t  /** Defaults to the System One endpoint. */\n    10\t  baseUrl?: string;\n    11\t  /** Defaults to the global `fetch`. */\n    12\t  fetch?: typeof fetch;\n    13\t}\n    14\t\n    15\t/** Asks Jev over HTTP with the global `fetch` (or an injected one). */\n    16\texport class JevClient implements JevAsker {\n    17\t  private readonly apiKey: string;\n    18\t  private readonly model: string | undefined;\n    19\t  private readonly baseUrl: string | undefined;\n    20\t  private readonly fetcher: typeof fetch;\n    21\t\n    22\t  constructor(options: JevClientOptions = {}) {\n    23\t    this.apiKey = options.apiKey ?? process.env.TYPESAFE_API_KEY ?? '';\n    24\t    this.model = options.model;\n    25\t    this.baseUrl = options.baseUrl;\n    26\t    this.fetcher = options.fetch ?? fetch;\n    27\t  }\n    28\t\n    29\t  async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {\n    30\t    if (!this.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');\n    31\t    const request = buildJevRequest(\n    32\t      { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },\n    33\t      state,\n    34\t      questions,\n    35\t    );\n    36\t    const response = await this.fetcher(request.url, {\n    37\t      method: request.method,\n    38\t      headers: request.headers,\n    39\t      body: request.body,\n    40\t    });\n    41\t    return parseJevResponse(response.status, response.ok, await response.text());\n    42\t  }\n    43\t}\n    44\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Plan: add `baseUrl` to HookConfig, read it in resolveHookConfig, pass it through jevAsker, declare it in userConfig, then add a test.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_12",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts",
+      "old_string": "export type HookConfig = CompactOptions & {\n  apiKey?: string;",
+      "new_string": "export type HookConfig = CompactOptions & {\n  apiKey?: string;\n  baseUrl?: string;"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_12",
+     "text": "The file /work/fast-jev-compaction/hooks/fast-jev.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    41\texport type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetchResponse>;\n    42\t\n    43\texport type HookConfig = CompactOptions & {\n    44\t  apiKey?: string;\n    45\t  compactAtPercent: number;\n    46\t  minReductionRatio: number;\n    47\t  model: string;\n    48\t};\n    49\t\n    50\tfunction optionNumber(options: PluginOptions, key: string, fallback: number): number {",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_13",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts",
+      "old_string": "  const apiKey = optionString(options, 'apiKey');\n  if (apiKey) config.apiKey = apiKey;",
+      "new_string": "  const apiKey = optionString(options, 'apiKey');\n  if (apiKey) config.apiKey = apiKey;\n  const baseUrl = optionString(options, 'baseUrl');\n  if (baseUrl) config.baseUrl = baseUrl;"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_13",
+     "text": "The file /work/fast-jev-compaction/hooks/fast-jev.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    80\t    ),\n    81\t    model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,\n    82\t  };\n    83\t  const apiKey = optionString(options, 'apiKey');\n    84\t  if (apiKey) config.apiKey = apiKey;\n    85\t  const goal = optionString(options, 'goal');\n    86\t  if (goal) config.goal = goal;\n    87\t  return config;\n    88\t}\n    89\t\n    90\t/** A `JevAsker` over the engine's `$.http.fetch`. */\n    91\texport function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {\n    92\t  return {",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_14",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts",
+      "old_string": "export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {\n  return {\n    async ask(state, questions) {\n      const request = buildJevRequest({ apiKey, model }, state, questions);",
+      "new_string": "export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string, baseUrl: string): JevAsker {\n  return {\n    async ask(state, questions) {\n      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_14",
+     "text": "The file /work/fast-jev-compaction/hooks/fast-jev.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    90\t/** A `JevAsker` over the engine's `$.http.fetch`. */\n    91\texport function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {\n    92\t  return {\n    93\t    async ask(state, questions) {\n    94\t      const request = buildJevRequest({ apiKey, model }, state, questions);\n    95\t      const response = await fetchFn(request.url, {\n    96\t        method: request.method,\n    97\t        headers: request.headers,\n    98\t        body: request.body,\n    99\t      });\n   100\t      return parseJevResponse(response.status, response.ok, response.text);\n   101\t    },\n   102\t  };\n   103\t}\n   104\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_15",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts",
+      "old_string": "jevAsker(fetchFn, config.apiKey, config.model)",
+      "new_string": "jevAsker(fetchFn, config.apiKey, config.model, config.baseUrl)"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_15",
+     "text": "The file /work/fast-jev-compaction/hooks/fast-jev.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n   166\t  messages: readonly SessionMessage[],\n   167\t  config: HookConfig,\n   168\t  fetchFn: HookFetch,\n   169\t): Promise<SessionCompaction> {\n   170\t  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');\n   171\t  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);\n   172\t  return { result, messages: toSessionMessages(messages, result.messages) };\n   173\t}\n   174\t\n   175\tfunction percent(ratio: number): string {\n   176\t  return `${Math.round(ratio * 100)}%`;",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_16",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/.claude-plugin/plugin.json",
+      "old_string": "    \"model\": {",
+      "new_string": "    \"baseUrl\": {\n      \"type\": \"string\",\n      \"title\": \"Jev endpoint\",\n      \"description\": \"System One endpoint. Leave unset for TypeSafe; use https://openrouter.ai/api/v1/systemone for OpenRouter.\",\n      \"default\": \"\"\n    },\n    \"model\": {"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_16",
+     "text": "The file /work/fast-jev-compaction/.claude-plugin/plugin.json has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    50\t      \"type\": \"number\",\n    51\t      \"title\": \"Truncated tool result head\",\n    52\t      \"description\": \"Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.\",\n    53\t      \"default\": 300\n    54\t    },\n    55\t    \"model\": {\n    56\t      \"type\": \"string\",\n    57\t      \"title\": \"Jev model\",\n    58\t      \"description\": \"TypeSafe Jev model name.\",\n    59\t      \"default\": \"jev-latest\"\n    60\t    }\n    61\t  }\n    62\t}",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Typechecking.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_17",
+     "tool": "Bash",
+     "input": {
+      "command": "npm run typecheck",
+      "description": "Typecheck library and hook"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_17",
+     "text": "> fast-jev-compaction@0.2.0 typecheck\n> tsc --noEmit && npm run typecheck:hooks\n\n> fast-jev-compaction@0.2.0 typecheck:hooks\n> tsc -p tsconfig.hooks.json\n\nhooks/fast-jev.ts(175,88): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.\n  Type 'undefined' is not assignable to type 'string'.\n\nFound 1 error in hooks/fast-jev.ts:175",
+     "isError": true
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "`config.baseUrl` is optional, so the parameter must be too.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_18",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/fast-jev.ts",
+      "old_string": "model: string, baseUrl: string): JevAsker {",
+      "new_string": "model: string, baseUrl?: string): JevAsker {"
+     }
+    },
+    {
+     "tool_use_id": "toolu_19",
+     "tool": "Bash",
+     "input": {
+      "command": "npm run typecheck",
+      "description": "Typecheck library and hook"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_18",
+     "text": "The file /work/fast-jev-compaction/hooks/fast-jev.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    90\t/** A `JevAsker` over the engine's `$.http.fetch`. */\n    91\texport function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {\n    92\t  return {\n    93\t    async ask(state, questions) {\n    94\t      const request = buildJevRequest({ apiKey, model }, state, questions);\n    95\t      const response = await fetchFn(request.url, {\n    96\t        method: request.method,",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_19",
+     "text": "> fast-jev-compaction@0.2.0 typecheck\n> tsc --noEmit && npm run typecheck:hooks\n\n> fast-jev-compaction@0.2.0 typecheck:hooks\n> tsc -p tsconfig.hooks.json\n",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Typecheck is clean. Adding a test that the configured URL reaches the request.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_20",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/tests/hook.test.ts",
+      "old_string": "describe('session message mapping', () => {",
+      "new_string": "it('passes baseUrl through to the request', async () => {\n    const urls: string[] = [];\n    const fetchFn: HookFetch = async (url) => {\n      urls.push(url);\n      return { status: 200, ok: true, text: JSON.stringify({ answers: allKept(8) }) };\n    };\n    const config = resolveHookConfig({ baseUrl: 'https://openrouter.ai/api/v1/systemone', apiKey: 'k' });\n    await compactSession(sampleSession(), config, fetchFn);\n    expect(urls.every((u) => u === 'https://openrouter.ai/api/v1/systemone')).toBe(true);\n  });\n});\n\ndescribe('session message mapping', () => {"
+     }
+    },
+    {
+     "tool_use_id": "toolu_21",
+     "tool": "Bash",
+     "input": {
+      "command": "npx vitest run tests/hook.test.ts",
+      "description": "Run the hook tests"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_20",
+     "text": "The file /work/fast-jev-compaction/tests/hook.test.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    52\t}\n    53\t\n    54\tdescribe('hook config', () => {\n    55\t  it('reads userConfig values and falls back to defaults', () => {\n    56\t    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });\n    57\t    expect(\n    58\t      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),\n    59\t    ).toEqual({\n    60\t      apiKey: 'k',\n    61\t      keepThreshold: 0.3,\n    62\t      maxStateTokens: 1000,\n    63\t      model: 'jev-x',\n    64\t      goal: 'g',\n    65\t      compactAtPercent: 60,\n    66\t      minReductionRatio: 0.25,\n    67\t    });\n    68\t  });\n    69\t});\n    70\t\n    71\tdescribe('session message mapping', () => {\n    72\t  it('returns the engine objects for untouched messages and handle-less copies for rebuilt ones', () => {",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_21",
+     "text": "RUN  v2.1.8 /work/fast-jev-compaction\n\n ❯ tests/hook.test.ts (7 tests | 1 failed) 23ms\n   ✓ hook config > reads userConfig values and falls back to defaults\n   ✓ hook config > passes baseUrl through to the request\n   ✓ session message mapping > returns the engine objects for untouched messages and handle-less copies for rebuilt ones\n   ✓ session message mapping > preserves short dropped-result messages and their handles\n   ✓ compactSession > runs the library over the engine fetch and reports the outcome\n   × compactSession > splits a long decision log into ui.log lines under the host limit 5ms\n     → expected 4097 to be less than or equal to 4096\n   ✓ compactSession > throws on a missing key and on failed requests so the hook falls back\n\n FAIL  tests/hook.test.ts > compactSession > splits a long decision log into ui.log lines under the host limit\nAssertionError: expected 4097 to be less than or equal to 4096\n ❯ tests/hook.test.ts:139:31\n\n Test Files  1 failed (1)\n      Tests  1 failed | 6 passed (7)\n   Duration  402ms",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "The new test passes; the only failure is the same pre-existing one. Documenting the option.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_22",
+     "tool": "Grep",
+     "input": {
+      "pattern": "\\| `model` \\|",
+      "path": "/work/fast-jev-compaction/hooks/README.md",
+      "output_mode": "content",
+      "-n": true
+     }
+    },
+    {
+     "tool_use_id": "toolu_23",
+     "tool": "Read",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/README.md"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_22",
+     "text": "hooks/README.md:47:| `model` | `jev-latest` |",
+     "isError": false
+    },
+    {
+     "tool_use_id": "toolu_23",
+     "text": "     1\t# fast-jev-compaction Claude Code mod\n     2\t\n     3\tThis plugin uses Claude Code function hooks to replace a compaction with the\n     4\toriginal messages, minus the tool calls and tool results Jev judged no longer\n     5\tneeded. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,\n     6\tfinds the TypeSafe key, hands `session.compact` transcripts to the\n     7\t`fast-jev-compaction` library in `src/` (the plugin folder is the repository\n     8\troot, so the hook imports it directly) and maps the result back onto session\n     9\tmessages. User and assistant text is never touched. Jev is sent the whole\n    10\tconversation as `state` (tool outputs replaced by a one-line note) and, for\n    11\tevery tool call outside the pinned first and newest messages, two questions:\n    12\twhether the call should stay and whether its full output should stay. An\n    13\titem is kept when Jev's probability reaches `keepThreshold`; a dropped result\n    14\tis truncated to its first `truncateHeadChars` characters plus a one-line note,\n    15\tand a dropped call disappears with its result.\n    16\t\n    17\tThe state is fitted into `maxStateTokens` in stages: tool inputs are\n    18\ttruncated, then long texts are abridged (oldest first, pinned messages last),\n    19\tthen old messages collapse to a `[… N chars omitted …]` note, then old tool\n    20\tcalls shrink to one line each, then old call-less messages are left out and\n    21\truns of old call-only messages fold together. Questions are split into as many requests as\n    22\tneeded so each request (state plus questions) stays under `maxRequestTokens`;\n    23\tthe full state is resent with every request. Token counts are estimated\n    24\twithout a tokenizer, calibrated to land a little above what Jev reports.\n    25\t\n    26\tThe mod is an early-access Claude Code function-hook module. The checked-in\n    27\ttype reference was generated by Claude Code **2.1.274**. Enable the function\n    28\thooks surface before installing or loading it:\n    29\t\n    30\t```sh\n    31\texport CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1\n    32\texport TYPESAFE_API_KEY=\"<your TypeSafe key>\"\n    33\t\n    34\tclaude plugin marketplace add tamaratran/fast-jev-compaction\n    35\tclaude plugin install fast-jev-compaction@fast-jev-compaction\n    36\t```\n    37\t\n    38\tFor local development:\n    39\t\n    40\t```sh\n    41\tCLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .\n    42\t```\n    43\t\n    44\t## Configuration\n    45\t\n    46\tThe plugin declares these `userConfig` values in\n    47\t`.claude-plugin/plugin.json`:\n    48\t\n    49\t| Option | Default |\n    50\t| --- | ---: |\n    51\t| `keepThreshold` | `0.5` |\n    52\t| `preserveRecentMessages` | `6` |\n    53\t| `compactAtPercent` | `60` |\n    54\t| `minReductionRatio` | `0.25` |\n    55\t| `maxStateTokens` | `25000` |\n    56\t| `maxRequestTokens` | `30000` |\n    57\t| `truncateHeadChars` | `300` |\n    58\t| `model` | `jev-latest` |\n    59\t\n    60\tThe TypeSafe key can be supplied as the sensitive `apiKey` plugin option or\n    61\tthrough `TYPESAFE_API_KEY`. The environment variable is the recommended\n    62\tdevelopment setup.\n    63\t\n    64\tEvery option except `apiKey`, `compactAtPercent`, `minReductionRatio` and\n    65\t`model` is passed straight to the library; see the root README for what they\n    66\tdo. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,\n    67\tthe response is malformed, the key is unavailable, the history cannot be\n    68\tfitted into the state budget, or the estimated reduction is below\n    69\t`minReductionRatio`, the hook logs a fallback and delegates to Claude Code's\n    70\tbuilt-in compaction. The outcome is shown as a toast and logged with the\n    71\treduction, per-reason counts, state size and request count; a per-call\n    72\t`decisions:` line with both probabilities is logged for diagnosis. The\n    73\t`turn.complete` hook requests\n    74\tcompaction when `context.percent` reaches `compactAtPercent`, with an\n    75\tin-flight guard.\n    76\t\n    77\t## Scope and caveat\n    78\t\n    79\tFunction hooks are early access and may change between Claude Code releases.\n    80\tThis mod uses the generated declarations from 2.1.274 in\n    81\t`types/claude-code.d.ts`; regenerate and review that file after a\n    82\tClaude Code upgrade.\n    83\t\n    84\tReferences:\n    85\t\n    86\t- [Claude Code plugins](https://code.claude.com/docs/en/plugins)\n    87\t- [Claude Code plugins reference](https://code.claude.com/docs/en/plugins-reference)\n    88\t- [Claude Code hooks](https://code.claude.com/docs/en/hooks)\n    89\t",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_24",
+     "tool": "Edit",
+     "input": {
+      "file_path": "/work/fast-jev-compaction/hooks/README.md",
+      "old_string": "| `model` | `jev-latest` |",
+      "new_string": "| `model` | `jev-latest` |\n| `baseUrl` | TypeSafe System One (set `https://openrouter.ai/api/v1/systemone` for OpenRouter) |"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_24",
+     "text": "The file /work/fast-jev-compaction/hooks/README.md has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n    36\t```\n    37\t\n    38\tFor local development:\n    39\t\n    40\t```sh\n    41\tCLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .\n    42\t```\n    43\t\n    44\t## Configuration\n    45\t\n    46\tThe plugin declares these `userConfig` values in\n    47\t`.claude-plugin/plugin.json`:\n    48\t\n    49\t| Option | Default |\n    50\t| --- | ---: |",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "Checking the full change set.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_25",
+     "tool": "Bash",
+     "input": {
+      "command": "git diff --stat",
+      "description": "Summarize the diff"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_25",
+     "text": " .claude-plugin/plugin.json |  6 ++++++\n hooks/README.md            |  1 +\n hooks/fast-jev.ts          |  9 ++++++---\n tests/hook.test.ts         | 11 +++++++++++\n 4 files changed, 24 insertions(+), 3 deletions(-)",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "Looks good. Before opening the PR, double check the OpenRouter endpoint path: is it /api/v1/systemone or /api/alpha/decisions?",
+   "toolUses": []
+  },
+  {
+   "role": "assistant",
+   "text": "",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_26",
+     "tool": "WebFetch",
+     "input": {
+      "url": "https://openrouter.ai/docs/guides/community/typesafe-sdk",
+      "prompt": "Which endpoint and request shape does the TypeSafe SDK use on OpenRouter?"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_26",
+     "text": "The page documents pointing the TypeSafe SDK at OpenRouter.\n\n- Base URL: `https://openrouter.ai/api`. The SDK appends `/v1/systemone`, so requests go to `https://openrouter.ai/api/v1/systemone`.\n- Auth: `Authorization: Bearer <OpenRouter API key>`. No TypeSafe account is needed.\n- Model IDs: bare TypeSafe IDs are mapped: `jev-1.13` -> `typesafe/jev-1.13`, `jev-latest` -> `~typesafe/jev-latest`. Prefixed IDs are used as-is.\n- Request and response format: the System One API implements TypeSafe's shapes. Requests need `model`, `state`, `questions`; responses contain `model`, `answers`, `usage`, plus OpenRouter's `id`, `provider`, and `usage.cost`.\n- A separate Decisions API exists at `POST https://openrouter.ai/api/alpha/decisions` with its own schema; it is not the TypeSafe shape.\n- `GET /api/v1/models` returns OpenRouter's model list shape, which the TypeSafe SDK rejects.",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "text": "It is `https://openrouter.ai/api/v1/systemone`. `/api/alpha/decisions` is a different API with its own schema, so the value in the docs and the test is right.",
+   "toolUses": [
+    {
+     "tool_use_id": "toolu_27",
+     "tool": "Bash",
+     "input": {
+      "command": "git status --short",
+      "description": "Show working tree status"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "",
+   "toolUses": [],
+   "toolResults": [
+    {
+     "tool_use_id": "toolu_27",
+     "text": " M .claude-plugin/plugin.json\n M hooks/README.md\n M hooks/fast-jev.ts\n M tests/hook.test.ts",
+     "isError": false
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "text": "Great. Now write the PR description. Mention the pre-existing test failure with the exact assertion.",
+   "toolUses": []
+  }
+ ]
+}
