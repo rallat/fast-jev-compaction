@@ -7,12 +7,16 @@ import {
   compact,
   compactMessages,
   decideCall,
+  decideCalls,
   estimateTokens,
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
+  STATE_CONTEXT,
+  type CallAnswer,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -74,18 +78,23 @@ const fit = {
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
     expect(resolveOptions()).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.7,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
-      truncateHeadChars: 300,
+      truncateHeadChars: 150,
+      keepBudgetTokens: 1500,
+      keepBudgetThreshold: 0.2,
+      dropCallThreshold: 0.3,
     });
     expect(resolveOptions({
       keepThreshold: Number.NaN,
       preserveRecentMessages: 2.7,
       truncateHeadChars: -1.2,
+      keepBudgetTokens: -5,
     })).toMatchObject({
-      keepThreshold: 0.5,
+      keepThreshold: 0.7,
+      keepBudgetTokens: 0,
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
@@ -255,9 +264,92 @@ describe('question batching', () => {
   });
 });
 
+describe('questions', () => {
+  const read: ToolCall = {
+    id: 't4',
+    tool: 'Read',
+    tool_use_id: 'tool-4',
+    input: {},
+    callIndex: 1,
+    resultIndex: 2,
+    resultChars: 1231,
+    isError: false,
+    pinned: false,
+  };
+
+  it('ask what the latest request needs, without suggesting a re-run makes outputs safe to drop', () => {
+    const questions = questionsFor(read);
+    expect(Object.keys(questions)).toEqual(['call_t4', 'result_t4']);
+    const text = [STATE_CONTEXT, ...Object.values(questions).map((q) => q.instructions)].join('\n');
+    expect(text).not.toMatch(/re-?run|re-?read/i);
+    expect(questions.result_t4?.instructions).toContain("user's latest request");
+    expect(questions.result_t4?.instructions).toContain('t4 (Read, 1231 chars)');
+    expect(questions.call_t4?.instructions).toContain('record');
+  });
+});
+
 describe('decisions', () => {
   const options = { keepThreshold: 0.5 };
   const unpinned = { id: 't1', tool: 'Read', pinned: false };
+
+  it('truncates instead of removing a call unless keepCall is below dropCallThreshold', () => {
+    const floor = { keepThreshold: 0.7, dropCallThreshold: 0.3 };
+    expect(decideCall(unpinned, { keepCall: 0.4, keepResult: 0.1 }, floor)).toMatchObject({
+      action: 'drop_result',
+      reason: 'result_dropped',
+    });
+    expect(decideCall(unpinned, { keepCall: 0.2, keepResult: 0.1 }, floor).action).toBe('drop_call');
+    expect(decideCall(unpinned, { keepCall: 0.1, keepResult: 0.7 }, floor).action).toBe('keep');
+  });
+
+  describe('keep budget', () => {
+    const budget = { keepThreshold: 0.7, dropCallThreshold: 0.3, keepBudgetTokens: 1000, keepBudgetThreshold: 0.2 };
+    const make = (id: string, pinned = false): ToolCall => ({
+      id,
+      tool: 'Bash',
+      tool_use_id: `tool-${id}`,
+      input: {},
+      callIndex: 1,
+      resultIndex: 2,
+      resultChars: 0,
+      isError: false,
+      pinned,
+    });
+    const run = (rows: [string, number, number, number][], pinned: string[] = []) => {
+      const calls = rows.map(([id]) => make(id, pinned.includes(id)));
+      const answers = new Map<string, CallAnswer>(rows.map(([id, keepCall, keepResult]) => [id, { keepCall, keepResult }]));
+      const tokens = new Map(rows.map(([id, , , t]) => [id, t]));
+      return Object.fromEntries(decideCalls(calls, answers, tokens, budget).map((d) => [d.id, d.action]));
+    };
+
+    it('keeps the likeliest results per token below keepThreshold while they fit the budget', () => {
+      expect(run([
+        ['big', 0.9, 0.6, 3000],
+        ['small', 0.9, 0.4, 300],
+        ['medium', 0.9, 0.3, 600],
+        ['noise', 0.9, 0.15, 10],
+        ['junk', 0.1, 0.05, 50],
+      ])).toEqual({ big: 'drop_result', small: 'keep', medium: 'keep', noise: 'drop_result', junk: 'drop_call' });
+    });
+
+    it('always keeps results at or above keepThreshold and pinned calls, outside the budget', () => {
+      expect(run([
+        ['sure', 0.9, 0.8, 50_000],
+        ['pinned', 0, 0, 50_000],
+        ['costly', 0.9, 0.5, 900],
+        ['cheap', 0.9, 0.45, 200],
+      ], ['pinned'])).toEqual({ sure: 'keep', pinned: 'keep', costly: 'drop_result', cheap: 'keep' });
+    });
+
+    it('keeps nothing extra when the budget is zero', () => {
+      const calls = [make('a')];
+      const decisions = decideCalls(calls, new Map([['a', { keepCall: 0.9, keepResult: 0.6 }]]), new Map([['a', 10]]), {
+        ...budget,
+        keepBudgetTokens: 0,
+      });
+      expect(decisions[0]?.action).toBe('drop_result');
+    });
+  });
 
   it('keeps, drops the result, or drops the call based on the keep probabilities', () => {
     expect(decideCall(unpinned, { keepCall: 0.9, keepResult: 0.7 }, options).action).toBe('keep');
@@ -362,6 +454,28 @@ describe('compact', () => {
     expect(output.messages).toHaveLength(messages.length);
     expect(output.stats).toMatchObject({ resultsDropped: 3, kept: 0, callsDropped: 0, pinned: 0 });
     expect(reductionRatio(output)).toBeGreaterThan(0);
+  });
+
+  it('keeps the output the latest request needs even when every probability is low', async () => {
+    const messages = transcript();
+    messages[4]!.toolUses[0]!.text = 'x'.repeat(2000);
+    messages[5]!.toolResults![0]!.text = 'x'.repeat(2000);
+    messages[7]!.toolResults![0]!.text = `FAIL b.test.ts\n${'  at frame\n'.repeat(60)}AssertionError: expected 2 to be 3`;
+    const answers: Record<string, number> = {
+      call_t1: 0.5,
+      result_t1: 0.1,
+      call_t2: 0.2,
+      result_t2: 0.12,
+      call_t3: 0.6,
+      result_t3: 0.35,
+    };
+    const output = await compact(messages, fakeJev((name) => answers[name] ?? 0), { preserveRecentMessages: 1 });
+    expect(output.decisions.map((d) => d.action)).toEqual(['drop_result', 'drop_call', 'keep']);
+    expect(output.messages.flatMap((m) => m.toolResults ?? []).map((r) => r.tool_use_id)).toEqual(['tool-1', 'tool-3']);
+    expect(output.messages.find((m) => m.toolResults?.[0]?.tool_use_id === 'tool-3')?.toolResults?.[0]?.text).toContain(
+      'AssertionError: expected 2 to be 3',
+    );
+    expect(output.stats).toMatchObject({ kept: 1, resultsDropped: 1, callsDropped: 1 });
   });
 
   it('keeps everything without calling Jev when no tool call is a candidate', async () => {

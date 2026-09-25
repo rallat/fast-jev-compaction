@@ -13,8 +13,26 @@
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
-      "default": 0.5
+      "description": "Jev probability that a tool result is still needed at or above which it always stays in full, whatever its size.",
+      "default": 0.7
+    },
+    "keepBudgetTokens": {
+      "type": "number",
+      "title": "Keep budget (tokens)",
+      "description": "Estimated tokens of tool results below the keep threshold that may still stay in full, likeliest per token first; 0 disables.",
+      "default": 1500
+    },
+    "keepBudgetThreshold": {
+      "type": "number",
+      "title": "Keep budget threshold",
+      "description": "Minimum Jev probability for a tool result to compete for the keep budget.",
+      "default": 0.2
+    },
+    "dropCallThreshold": {
+      "type": "number",
+      "title": "Drop call threshold",
+      "description": "A tool call is removed together with its result only when Jev's probability that the call still matters is below this; otherwise its result is truncated.",
+      "default": 0.3
     },
     "preserveRecentMessages": {
       "type": "number",
@@ -50,7 +68,7 @@
       "type": "number",
       "title": "Truncated tool result head",
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
-      "default": 300
+      "default": 150
     },
     "model": {
       "type": "string",
