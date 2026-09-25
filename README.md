@@ -124,6 +124,14 @@ stage was needed, and the number of requests.
   result is safe to delete. The assistant can always re-run the tool.
 - The full state is repeated with every request, so a history near the state
   ceiling costs one request per handful of questions.
+- Preserved thinking (Claude Opus 5.5, Claude Fable 5.1): a thinking block is
+  bound to every message before it, and removing or editing a message in the
+  middle "invalidates every later thinking block". The Claude Code hook
+  therefore returns every assistant message after the first edit without its
+  engine handle, so it is rebuilt from its text and tool blocks and carries no
+  thinking. Stripping thinking blocks while keeping text and tool calls is the
+  documented recovery. Those turns lose their reasoning, and the prompt cache
+  restarts once from the first edit, as it does after any compaction.
 
 ## Claude Code plugin
 

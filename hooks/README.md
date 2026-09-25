@@ -74,6 +74,24 @@ reduction, per-reason counts, state size and request count; a per-call
 compaction when `context.percent` reaches `compactAtPercent`, with an
 in-flight guard.
 
+## Preserved thinking
+
+On Claude Opus 5.5 and Claude Fable 5.1, a thinking block is bound to the
+`system` prompt, the tools and every message before it. The Claude API model
+migration guide says: "Editing, reordering, or removing an earlier turn while
+keeping later ones" invalidates every later thinking block, and "Snipping
+individual turns out of the *middle* of the transcript invalidates every later
+thinking block, and no client-side shape avoids it". Accounts created on or
+after 2026-08-31 get a 400 when such a block is replayed.
+
+A message returned with its engine `handle` "stands as the engine has it",
+thinking blocks included. So `toSessionMessages` keeps handles only up to the
+first removed or rebuilt message. After that point, every assistant message is
+returned without its handle and is built from its `role`, `text` and tool
+blocks, so it carries no thinking. User messages keep their handles. This
+matches the guide's recovery: "Strip every `thinking` and `redacted_thinking`
+block from the history (each turn's `text` and `tool_use` blocks stay)".
+
 ## Scope and caveat
 
 Function hooks are early access and may change between Claude Code releases.
