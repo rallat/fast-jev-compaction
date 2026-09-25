@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compactGoal,
+  compactRoute,
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -53,7 +56,13 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+      compactTriggers: ['manual', 'auto', 'plugin'],
+      compactSubagents: false,
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +73,183 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      compactTriggers: ['manual', 'auto', 'plugin'],
+      compactSubagents: false,
     });
+  });
+
+  it('reads compactTriggers as a comma list or array and compactSubagents as a boolean', () => {
+    expect(resolveHookConfig({ compactTriggers: ' manual , precompute,bogus', compactSubagents: true })).toMatchObject({
+      compactTriggers: ['manual', 'precompute'],
+      compactSubagents: true,
+    });
+    expect(resolveHookConfig({ compactTriggers: ['auto'] }).compactTriggers).toEqual(['auto']);
+    expect(resolveHookConfig({ compactTriggers: 'none' }).compactTriggers).toEqual([]);
+    expect(resolveHookConfig({ compactSubagents: 'yes' }).compactSubagents).toBe(false);
+  });
+
+  it('matches trigger names in any case and keeps the defaults when none is recognised', () => {
+    expect(resolveHookConfig({ compactTriggers: 'Manual, AUTO' }).compactTriggers).toEqual([
+      'manual',
+      'auto',
+    ]);
+    expect(resolveHookConfig({ compactTriggers: ' None ' }).compactTriggers).toEqual([]);
+    expect(resolveHookConfig({ compactTriggers: 'manaul,atuo' }).compactTriggers).toEqual([
+      'manual',
+      'auto',
+      'plugin',
+    ]);
+  });
+});
+
+describe('compaction routing', () => {
+  const config = resolveHookConfig({});
+
+  it('runs Jev on manual, auto and plugin compactions of the main conversation', () => {
+    for (const trigger of ['manual', 'auto', 'plugin'] as const) {
+      expect(compactRoute({ trigger }, config)).toBe('jev');
+    }
+  });
+
+  it('vetoes precompute while fast-jev handles auto, so no core summary is precomputed', () => {
+    expect(compactRoute({ trigger: 'precompute' }, config)).toBe('skip');
+    const manualOnly = resolveHookConfig({ compactTriggers: 'manual' });
+    expect(compactRoute({ trigger: 'precompute' }, manualOnly)).toBe('core');
+    expect(compactRoute({ trigger: 'auto' }, manualOnly)).toBe('core');
+    const withPrecompute = resolveHookConfig({ compactTriggers: 'auto,precompute' });
+    expect(compactRoute({ trigger: 'precompute' }, withPrecompute)).toBe('jev');
+  });
+
+  it('leaves subagent transcripts to core unless compactSubagents is set', () => {
+    expect(compactRoute({ trigger: 'auto', agentId: 'a1' }, config)).toBe('core');
+    expect(compactRoute({ trigger: 'precompute', agentId: 'a1' }, config)).toBe('core');
+    const subagents = resolveHookConfig({ compactSubagents: true });
+    expect(compactRoute({ trigger: 'auto', agentId: 'a1' }, subagents)).toBe('jev');
+  });
+
+  it('adds /compact instructions to the goal Jev sees', () => {
+    const messages = transcript();
+    expect(compactGoal(messages, undefined, undefined)).toBeUndefined();
+    expect(compactGoal(messages, 'ship it', '  ')).toBe('ship it');
+    expect(compactGoal(messages, 'ship it', 'keep the test output')).toBe(
+      'ship it\nCompaction instructions: keep the test output',
+    );
+    expect(compactGoal(messages, undefined, 'keep the test output')).toBe(
+      'Fix the failing test.\ngo ahead\nCompaction instructions: keep the test output',
+    );
+  });
+});
+
+type Handler = (...args: any[]) => Promise<unknown>;
+
+/** Drives `register` with a fake `on` and a fake `$`, recording what the hook touched. */
+function harness(options: Record<string, unknown> = {}, percent = 0) {
+  const handlers = new Map<string, Handler>();
+  const bodies: string[] = [];
+  const logs: string[] = [];
+  const answer = jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1), bodies);
+  const calls = { fetch: 0, usage: 0, compact: 0 };
+  const $ = {
+    http: {
+      fetch: async (url: string, init?: { body?: string }) => {
+        calls.fetch++;
+        return answer(url, init);
+      },
+    },
+    env: { get: async (name: string) => (name === 'TYPESAFE_API_KEY' ? 'k' : undefined) },
+    settings: { read: async () => ({}) },
+    ui: { log: (text: string) => logs.push(text), toast: () => {} },
+    session: {
+      usage: async () => {
+        calls.usage++;
+        return { context: { percent } };
+      },
+      compact: async () => {
+        calls.compact++;
+        return { messages: [] };
+      },
+    },
+  };
+  register(((event: string, handler: Handler) => handlers.set(event, handler)) as never, {
+    preserveRecentMessages: 1,
+    ...options,
+  } as never);
+  const nextCalls: unknown[] = [];
+  const next = async (event: unknown) => {
+    nextCalls.push(event);
+    return { messages: ['core'] };
+  };
+  const fire = (name: string, event: Record<string, unknown>) => handlers.get(name)!($, event, next);
+  return { fire, calls, bodies, logs, nextCalls };
+}
+
+describe('registered hooks', () => {
+  it('compacts a manual /compact through Jev and returns the pruned messages', async () => {
+    const h = harness();
+    const out = (await h.fire('session.compact', { trigger: 'manual', messages: transcript() })) as {
+      messages: SessionMessage[];
+    };
+    expect(h.calls.fetch).toBe(1);
+    expect(h.nextCalls).toHaveLength(0);
+    expect(out.messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+  });
+
+  it('passes /compact instructions into the Jev goal', async () => {
+    const h = harness();
+    await h.fire('session.compact', { trigger: 'manual', instructions: 'keep the test output', messages: transcript() });
+    expect(JSON.parse(h.bodies[0]!).state.goal).toMatch(/Compaction instructions: keep the test output$/);
+  });
+
+  it('vetoes precompute without a Jev call', async () => {
+    const h = harness();
+    const event = { trigger: 'precompute', messages: transcript() };
+    const out = (await h.fire('session.compact', event)) as { skip?: string };
+    expect(h.calls.fetch).toBe(0);
+    expect(h.nextCalls).toHaveLength(0);
+    expect(out.skip).toEqual(expect.any(String));
+  });
+
+  it('hands precompute to core when auto is not a fast-jev trigger', async () => {
+    const h = harness({ compactTriggers: 'manual' });
+    const event = { trigger: 'precompute', messages: transcript() };
+    await h.fire('session.compact', event);
+    expect(h.calls.fetch).toBe(0);
+    expect(h.nextCalls).toEqual([event]);
+  });
+
+  it('hands a subagent transcript to core without a Jev call', async () => {
+    const h = harness();
+    const event = { trigger: 'auto', agentId: 'a1', messages: transcript() };
+    const out = await h.fire('session.compact', event);
+    expect(h.calls.fetch).toBe(0);
+    expect(h.nextCalls).toEqual([event]);
+    expect(out).toEqual({ messages: ['core'] });
+  });
+
+  it('compacts subagent transcripts and precompute when configured to', async () => {
+    const h = harness({ compactSubagents: true, compactTriggers: 'auto,precompute' });
+    await h.fire('session.compact', { trigger: 'auto', agentId: 'a1', messages: transcript() });
+    await h.fire('session.compact', { trigger: 'precompute', messages: transcript() });
+    expect(h.calls.fetch).toBe(2);
+    expect(h.nextCalls).toHaveLength(0);
+  });
+
+  it('hands a manual compaction to core when manual is not a fast-jev trigger', async () => {
+    const h = harness({ compactTriggers: 'auto' });
+    const event = { trigger: 'manual', messages: transcript() };
+    await h.fire('session.compact', event);
+    expect(h.calls.fetch).toBe(0);
+    expect(h.nextCalls).toEqual([event]);
+  });
+
+  it('auto-compacts the main conversation at the threshold but ignores subagent turns', async () => {
+    const h = harness({}, 90);
+    await h.fire('turn.complete', { agentId: 'a1', reason: 'answer' });
+    expect(h.calls).toMatchObject({ usage: 0, compact: 0 });
+    expect(h.nextCalls).toHaveLength(1);
+    await h.fire('turn.complete', { reason: 'answer' });
+    expect(h.calls).toMatchObject({ usage: 1, compact: 1 });
+    expect(h.nextCalls).toHaveLength(2);
   });
 });
 

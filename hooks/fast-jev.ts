@@ -2,6 +2,8 @@ import type {
   On,
   PluginOptions,
   Register,
+  SessionCompactInput,
+  SessionCompactTrigger,
   SessionMessage,
   ToolResultSummary,
   ToolUseSummary,
@@ -10,6 +12,7 @@ import type {
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import { goalFromMessages } from '../src/state.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -19,10 +22,14 @@ import type {
   ToolUse,
 } from '../src/types.js';
 
+const COMPACT_TRIGGERS: readonly SessionCompactTrigger[] = ['manual', 'auto', 'plugin', 'precompute'];
+
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  compactTriggers: ['manual', 'auto', 'plugin'] as SessionCompactTrigger[],
+  compactSubagents: false,
 };
 
 export type HookFetchInit = {
@@ -45,6 +52,10 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** The `session.compact` triggers Jev runs on; the rest go to core. */
+  compactTriggers: SessionCompactTrigger[];
+  /** Whether a subagent's or fork's own transcript (`agentId` set) goes through Jev. */
+  compactSubagents: boolean;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -55,6 +66,27 @@ function optionNumber(options: PluginOptions, key: string, fallback: number): nu
 function optionString(options: PluginOptions, key: string): string | undefined {
   const value = options[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Reads `compactTriggers` as a comma list (or a list) of trigger names in any
+ * case; names that are not triggers are ignored. `none` turns Jev off
+ * everywhere; any other value with no trigger in it keeps the defaults, so a
+ * typo cannot silently hand every compaction back to the built-in summary.
+ */
+function optionTriggers(options: PluginOptions): SessionCompactTrigger[] {
+  const value = options['compactTriggers'];
+  const names =
+    typeof value === 'string' && value.length > 0
+      ? value.split(',')
+      : Array.isArray(value)
+        ? (value as readonly string[])
+        : undefined;
+  if (!names) return [...HOOK_DEFAULTS.compactTriggers];
+  const wanted = new Set(names.map((name) => name.trim().toLowerCase()));
+  const triggers = COMPACT_TRIGGERS.filter((trigger) => wanted.has(trigger));
+  if (triggers.length === 0 && !wanted.has('none')) return [...HOOK_DEFAULTS.compactTriggers];
+  return triggers;
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
@@ -79,6 +111,11 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    compactTriggers: optionTriggers(options),
+    compactSubagents:
+      typeof options['compactSubagents'] === 'boolean'
+        ? options['compactSubagents']
+        : HOOK_DEFAULTS.compactSubagents,
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -154,6 +191,42 @@ export function toSessionMessages(
     }
     return rebuilt;
   });
+}
+
+/** What the `session.compact` hook does with one compaction. */
+export type CompactRoute = 'jev' | 'core' | 'skip';
+
+/**
+ * Decides who handles a compaction. A subagent's or fork's own transcript goes
+ * to core unless `compactSubagents` is set; a listed trigger runs Jev; any
+ * other trigger goes to core, except `precompute` while `auto` is listed: it
+ * is vetoed, because a core precompute is an LLM summary kept for the coming
+ * compaction, and nothing is computed or kept on a vetoed precompute.
+ */
+export function compactRoute(
+  event: Pick<SessionCompactInput, 'trigger' | 'agentId'>,
+  config: Pick<HookConfig, 'compactTriggers' | 'compactSubagents'>,
+): CompactRoute {
+  if (event.agentId !== undefined && !config.compactSubagents) return 'core';
+  if (config.compactTriggers.includes(event.trigger)) return 'jev';
+  if (event.trigger === 'precompute' && config.compactTriggers.includes('auto')) return 'skip';
+  return 'core';
+}
+
+/**
+ * The goal Jev sees for one compaction: the configured goal (or the last user
+ * prompts) with the text typed after `/compact` appended, so Jev keeps what the
+ * summary would have been told to stress. Without instructions, `goal` as is.
+ */
+export function compactGoal(
+  messages: readonly Message[],
+  goal: string | undefined,
+  instructions: string | undefined,
+): string | undefined {
+  const stress = instructions?.trim();
+  if (!stress) return goal;
+  const base = goal || goalFromMessages(messages);
+  return [base, `Compaction instructions: ${stress}`].filter(Boolean).join('\n');
 }
 
 export type SessionCompaction = {
@@ -261,8 +334,20 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    const route = compactRoute(event, configured);
+    if (route !== 'jev') {
+      const loop = event.agentId === undefined ? '' : ` of agent ${event.agentId}`;
+      $.ui.log(
+        `${event.trigger} compaction${loop} ${route === 'skip' ? 'skipped' : 'left to built-in summary'}`,
+      );
+      return route === 'skip'
+        ? { skip: 'fast-jev-compaction runs Jev when the compaction happens' }
+        : next(event);
+    }
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config: HookConfig = { ...configured, apiKey: await getApiKey($, configured) };
+      const goal = compactGoal(event.messages, configured.goal, event.instructions);
+      if (goal !== undefined) config.goal = goal;
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
@@ -290,7 +375,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (compacting) return next(event);
+    // A subagent's turn ends inside a main-loop turn; usage() and compact()
+    // act on the main conversation, which cannot compact while its turn runs.
+    if (compacting || event.agentId !== undefined) return next(event);
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
