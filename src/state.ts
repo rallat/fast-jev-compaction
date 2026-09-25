@@ -1,3 +1,4 @@
+import { redactInput, redactText } from './redact.js';
 import type {
   CompactionState,
   FittedState,
@@ -185,6 +186,27 @@ export function goalFromMessages(messages: readonly Message[]): string {
 }
 
 /**
+ * Builds the Jev state from the whole conversation and fits it into
+ * `maxStateTokens` (see `fitVerbatim`). Unless `redactSecrets` is false, every
+ * message text, tool input and the goal pass through the secret redaction
+ * first, so the budget is measured on what is actually sent. The messages and
+ * calls passed in are never modified.
+ */
+export function fitState(
+  messages: readonly Message[],
+  calls: readonly ToolCall[],
+  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'> &
+    Partial<Pick<ResolvedCompactOptions, 'redactSecrets'>>,
+): FittedState {
+  if (options.redactSecrets === false) return fitVerbatim(messages, calls, options);
+  return fitVerbatim(
+    messages.map((message) => ({ ...message, text: redactText(message.text) })),
+    calls.map((call) => ({ ...call, input: redactInput(call.input) })),
+    { ...options, goal: redactText(options.goal) },
+  );
+}
+
+/**
  * Builds the Jev state from the whole conversation and shrinks it in stages
  * until it fits `maxStateTokens`: tool inputs are truncated, then long texts
  * are abridged oldest-first (pinned messages last), then old messages collapse
@@ -192,7 +214,7 @@ export function goalFromMessages(messages: readonly Message[]): string {
  * messages that carry no call are left out, then runs of old call-only
  * messages are folded into one entry. Throws when even that is too big.
  */
-export function fitState(
+function fitVerbatim(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,

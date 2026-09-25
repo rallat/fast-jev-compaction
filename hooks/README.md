@@ -55,7 +55,12 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `redactSecrets` | `true` |
 | `model` | `jev-latest` |
+
+Compaction sends the conversation text and tool inputs, never tool outputs,
+to TypeSafe, with secrets redacted by default. See "What leaves your machine"
+in the root README for the exact fields.
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

@@ -56,6 +56,74 @@ built-in compaction summary with the original messages.
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
+## What leaves your machine
+
+Every compaction with at least one candidate tool call sends HTTPS requests
+to TypeSafe's Jev API (`https://api.typesafe.ai/v1/systemone`, or the
+`baseUrl` you pass to the library). If `baseUrl` points at a proxy or router,
+that service receives the same body as well as TypeSafe. Nothing is sent when
+no tool call is a candidate.
+
+Each request body holds:
+
+- `model`: the Jev model name (`jev-latest` by default).
+- `state.context`: a fixed description of the task (the same text every time).
+- `state.goal`: your `goal` option, or else your last three prompts (up to 500
+  characters each).
+- `state.history`: every user and assistant message, oldest first, with its
+  role and text. Long texts may be abridged or collapsed to fit
+  `maxStateTokens`. Each tool call appears with its tool name, its input as
+  JSON (up to 1000 characters), and a note with the outcome and size of its
+  output (`ok, 4213 chars (omitted)`).
+- `questions`: two yes/no questions per candidate call, naming only the call
+  id, the tool name and the output size.
+
+The only request header with your data is `authorization: Bearer <your
+TypeSafe key>`.
+
+What is never sent:
+
+- Tool outputs (file contents, command output, search results). Only their
+  length and whether the call failed are sent.
+- Thinking blocks. Claude Code does not pass them to the hook.
+- Anything from your machine outside the transcript: files, environment
+  variables, settings.
+
+Secret redaction (`redactSecrets`, on by default) runs over every message
+text, the goal and every string in each tool input before the state is built.
+It replaces these with a typed placeholder such as `[REDACTED:aws_key]`:
+
+- PEM private key blocks; AWS access key ids; GitHub tokens (`ghp_`, `gho_`,
+  `ghs_`, `ghu_`, `ghr_`, `github_pat_`); `sk-` keys (OpenAI, Anthropic,
+  OpenRouter); Slack `xox*-` tokens; Google `AIza` keys; JWTs.
+- `Authorization` and `Proxy-Authorization` values with any scheme
+  (`Bearer`, `Basic`, `Token`) or none, in header lines, `curl -H` arguments,
+  `setHeader('Authorization', ...)` calls and tool input fields; a `Bearer`
+  token with no header name; secret-named headers such as `X-Api-Key` or
+  `X-Auth-Token` in `curl -H` / `--header` arguments; passwords in URLs
+  (`postgres://user:[REDACTED:url_password]@host`). The scheme stays.
+- Literal values of secret-named keys (`password`, `passphrase`, `secret`,
+  `token`, `api_key`, `apiKey`, `private_key`, `access_key`, `credential`) in
+  `KEY=value`, `key: value`, `"key": "value"` and tool input fields. The key
+  name stays and only the value is replaced. For `password`, `passwd` and
+  `passphrase` keys even a short word is redacted. For the other keys an
+  unquoted value needs a digit, a symbol or 16 characters, and a quoted value
+  needs a digit, a symbol, mixed case or 8 characters, so a short plain word
+  such as `token: abcd` is sent. References such as `$TOKEN`,
+  `process.env.X` or `<your key>`, calls such as `getKey()`, type names and
+  bare variable names are left alone.
+
+Redaction changes only what is sent. The transcript that stays in your
+session is returned verbatim, secrets included. The state budget is measured
+after redaction. Redaction is pattern-based: a secret in an unknown format,
+such as a bare random string with no secret-looking key name, is sent as is.
+Personal data, internal hostnames and source code are not redacted.
+
+Before you use the plugin on a company or client repository, read TypeSafe's
+data retention and training policy (and the policy of any proxy you
+configure), and confirm that it is acceptable to send that conversation text
+there. Set `redactSecrets: false` only if you need Jev to see the raw values.
+
 ## Install and usage
 
 ```sh
@@ -110,6 +178,7 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `redactSecrets` | `true` | Replace secrets with `[REDACTED:<type>]` in the state sent to Jev (never in the returned transcript) |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting

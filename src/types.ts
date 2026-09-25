@@ -105,6 +105,11 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Replace secrets (keys, tokens, passwords) in the state sent to Jev with
+   * `[REDACTED:<type>]`. The returned transcript is never redacted. Default true.
+   */
+  redactSecrets?: boolean;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +119,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  redactSecrets: boolean;
 }
 
 export interface CompactResult {

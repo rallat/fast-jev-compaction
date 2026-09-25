@@ -21,6 +21,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  redactSecrets: true,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +50,10 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    redactSecrets:
+      typeof options.redactSecrets === 'boolean'
+        ? options.redactSecrets
+        : DEFAULT_OPTIONS.redactSecrets,
   };
 }
 

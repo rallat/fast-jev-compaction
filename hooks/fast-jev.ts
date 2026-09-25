@@ -84,6 +84,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  if (typeof options['redactSecrets'] === 'boolean') config.redactSecrets = options['redactSecrets'];
   return config;
 }
 

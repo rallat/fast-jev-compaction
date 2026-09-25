@@ -1,13 +1,13 @@
 {
   "name": "fast-jev-compaction",
   "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "description": "Verbatim Jev-guided compaction for Claude Code sessions. Sends conversation text and tool inputs (never tool outputs, secrets redacted) to TypeSafe's Jev API.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY. Compaction sends your conversation text and tool inputs (not tool outputs) to TypeSafe; see the README section \"What leaves your machine\".",
       "sensitive": true
     },
     "keepThreshold": {
@@ -51,6 +51,12 @@
       "title": "Truncated tool result head",
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
+    },
+    "redactSecrets": {
+      "type": "boolean",
+      "title": "Redact secrets sent to Jev",
+      "description": "Replace API keys, tokens, private keys, passwords and secret-named values with [REDACTED:<type>] in what is sent to TypeSafe. The transcript kept in your session is never changed.",
+      "default": true
     },
     "model": {
       "type": "string",
