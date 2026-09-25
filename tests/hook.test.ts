@@ -3,6 +3,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -90,7 +91,8 @@ describe('session message mapping', () => {
       new RegExp(`^${'x'.repeat(300)}\\n\\[fast-jev-compaction truncated 1700 chars`),
     );
     expect(out[2]?.toolResults?.[0]).toMatchObject({ tool_use_id: 'tool-1', isError: false });
-    expect(out[3]).toBe(messages[3]);
+    expect(out[3]?.handle).toBeUndefined();
+    expect(out[3]).toEqual({ role: 'assistant', text: '', toolUses: messages[3]!.toolUses });
     expect(out[4]).toBe(messages[4]);
   });
 
@@ -121,7 +123,7 @@ describe('compactSession', () => {
     expect(bodies).toHaveLength(1);
     expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
-    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+    expect(messages.map((m) => m.handle)).toEqual(['h-0', undefined, 'r-tool-2', undefined, 'h-6']);
     expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
     expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
@@ -145,5 +147,130 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+/**
+ * Index of the first output position that is not the engine's next message
+ * unchanged: a rebuilt message, or one that follows a removed one. -1 when the
+ * output is the input as is.
+ */
+function firstEdit(input: readonly SessionMessage[], output: readonly SessionMessage[]): number {
+  for (let i = 0; i < output.length; i++) if (output[i] !== input[i]) return i;
+  return output.length === input.length ? -1 : output.length;
+}
+
+describe('preserved thinking', () => {
+  function longTranscript(): SessionMessage[] {
+    const messages = transcript();
+    messages[1]!.toolUses[0]!.text = 'x'.repeat(2000);
+    messages[2]!.toolResults![0]!.text = 'x'.repeat(2000);
+    return messages;
+  }
+
+  function decide(messages: SessionMessage[], first: number, second: number, firstResult = 0.1) {
+    const calls = collectToolCalls(messages, 0);
+    const decisions = [
+      decideCall(calls[0]!, { keepCall: first, keepResult: firstResult }, { keepThreshold: 0.5 }),
+      decideCall(calls[1]!, { keepCall: second, keepResult: second }, { keepThreshold: 0.5 }),
+    ];
+    return toSessionMessages(messages, applyDecisions(messages, decisions, calls, 300));
+  }
+
+  it('returns no handle-bearing assistant message after the first edited position', () => {
+    for (const [first, second] of [
+      [0.1, 0.9],
+      [0.9, 0.9],
+      [0.1, 0.1],
+    ] as const) {
+      const messages = longTranscript();
+      const out = decide(messages, first, second);
+      const edit = firstEdit(messages, out);
+      expect(edit).toBeGreaterThan(0);
+      for (const later of out.slice(edit)) {
+        if (later.role === 'assistant') expect(later.handle).toBeUndefined();
+      }
+      expect(out.slice(0, edit).every((m, i) => m === messages[i])).toBe(true);
+    }
+  });
+
+  it('keeps later assistant text and tool blocks identical and later user messages whole', () => {
+    const messages = longTranscript();
+    const out = decide(messages, 0.1, 0.9);
+    expect(out.map((m) => m.handle)).toEqual(['h-0', undefined, 'r-tool-2', undefined, 'h-6']);
+    expect(out[1]).toEqual({ role: 'assistant', text: '', toolUses: messages[3]!.toolUses });
+    expect(out[1]!.toolUses[0]).toBe(messages[3]!.toolUses[0]);
+    expect(out[2]).toBe(messages[4]);
+    expect(out[3]).toEqual({ role: 'assistant', text: 'Fixing now.', toolUses: [] });
+    expect(out[4]).toBe(messages[6]);
+  });
+
+  it('rebuilds a later assistant turn holding text and tool uses from its text and tool blocks', () => {
+    const mixed = message('assistant', 'Checking the config.', {
+      toolUses: [{ tool_use_id: 'tool-9', tool: 'Read', input: { file_path: 'a.json' }, text: '{}' }],
+      handle: 'h-mixed',
+    });
+    const input = [message('user', 'old', { handle: 'h-old' }), mixed, result('tool-9', '{}')];
+    const out = toSessionMessages(input, input.slice(1));
+    expect(out[0]).toEqual({ role: 'assistant', text: 'Checking the config.', toolUses: mixed.toolUses });
+    expect(out[0]!.toolUses[0]).toBe(mixed.toolUses[0]);
+    expect(out[1]).toBe(input[2]);
+  });
+
+  it('returns every engine message whole when nothing was edited', () => {
+    const messages = transcript();
+    const out = decide(messages, 0.9, 0.9, 0.9);
+    expect(firstEdit(messages, out)).toBe(-1);
+    expect(out.every((m, i) => m === messages[i])).toBe(true);
+  });
+});
+
+describe('session.compact triggers', () => {
+  type Handler = (
+    $: unknown,
+    event: { trigger: string; messages: readonly SessionMessage[] },
+    next: (event: unknown) => Promise<unknown>,
+  ) => Promise<unknown>;
+
+  function compactHandler(): Handler {
+    const handlers = new Map<string, Handler>();
+    register(((name: string, handler: Handler) => handlers.set(name, handler)) as never, { apiKey: 'k' });
+    return handlers.get('session.compact')!;
+  }
+
+  function host(fetched: string[], logs: string[]) {
+    return {
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+      ui: { log: (text: string) => logs.push(text), toast: () => undefined },
+      http: {
+        fetch: async (url: string) => {
+          fetched.push(url);
+          return { status: 500, ok: false, text: 'down' };
+        },
+      },
+    };
+  }
+
+  it('skips precompute without asking Jev or the built-in summary', async () => {
+    const fetched: string[] = [];
+    const nexts: unknown[] = [];
+    const out = await compactHandler()(host(fetched, []), { trigger: 'precompute', messages: transcript() }, async (e) => {
+      nexts.push(e);
+      return { messages: [] };
+    });
+    expect(out).toEqual({ skip: expect.any(String) });
+    expect(fetched).toEqual([]);
+    expect(nexts).toEqual([]);
+  });
+
+  it('still runs on the triggers that install the result', async () => {
+    for (const trigger of ['manual', 'auto', 'plugin']) {
+      const logs: string[] = [];
+      const event = { trigger, messages: transcript() };
+      const out = await compactHandler()(host([], logs), event, async (e) => ({ fellBackWith: e }));
+      expect(logs.some((line) => line.startsWith('fallback to built-in summary'))).toBe(true);
+      expect(out).toEqual({ fellBackWith: event });
+    }
   });
 });

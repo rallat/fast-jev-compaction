@@ -126,22 +126,33 @@ function toolResultSummary(result: ToolResult): ToolResultSummary {
  * unchanged (a message, a tool use, a tool result) is the engine's own object,
  * handle included; anything rebuilt is a fresh message without a handle, so the
  * engine takes the edited content instead of its original.
+ *
+ * Preserved thinking: a thinking block is bound to every message before it, so
+ * removing or rewriting a message invalidates every later thinking block (a 400
+ * where the check is enforced). From the first edited position on, assistant
+ * messages are therefore rebuilt without their handle, which leaves out their
+ * thinking blocks and keeps their text and tool blocks. Messages before the
+ * first edit and later user messages keep their handles.
  */
 export function toSessionMessages(
   input: readonly SessionMessage[],
   output: readonly Message[],
 ): SessionMessage[] {
   const messages = new Map<Message, SessionMessage>();
+  const positions = new Map<Message, number>();
   const uses = new Map<ToolUse, ToolUseSummary>();
   const results = new Map<ToolResult, ToolResultSummary>();
-  for (const message of input) {
+  input.forEach((message, index) => {
     messages.set(message, message);
+    positions.set(message, index);
     for (const tool of message.toolUses) uses.set(tool, tool);
     for (const result of message.toolResults ?? []) results.set(result, result);
-  }
-  return output.map((message) => {
+  });
+  let edited = false;
+  return output.map((message, index) => {
     const own = messages.get(message);
-    if (own) return own;
+    if (!edited && (!own || positions.get(message) !== index)) edited = true;
+    if (own && !(edited && own.role === 'assistant')) return own;
     const rebuilt: SessionMessage = {
       role: message.role,
       text: message.text,
@@ -261,6 +272,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    // A precompute result is installed later, after newer turns were appended
+    // past the swap point; their thinking blocks predate the edit and would be
+    // invalid (see "Preserved thinking" in hooks/README.md). Nothing is
+    // precomputed, so the compaction that installs runs this hook in place.
+    if (event.trigger === 'precompute') return { skip: 'fast-jev compacts when the result installs' };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
